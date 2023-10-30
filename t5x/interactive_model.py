@@ -46,6 +46,9 @@ from t5x.infer import _Inferences
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
+import time
+from jax import block_until_ready
+
 BatchesType = Union[
     Sequence[Mapping[str, str]], Sequence[Sequence[Mapping[str, str]]]
 ]
@@ -81,6 +84,7 @@ class InteractiveModel(abc.ABC):
       init_random_seed: int = 42,
       add_eos: bool = True,
       eval_names: Optional[Sequence[str]] = None,
+      from_scratch:bool=False
   ):
     """Init function.
 
@@ -220,52 +224,57 @@ class InteractiveModel(abc.ABC):
       return self._train_state_initializer.from_scratch(rng).state_dict()
 
     restore_cfgs = []
-    # 1. From a checkpoint specified by `self._restore_checkpoint_cfg.path`, if
-    # set.
-    if self._restore_checkpoint_cfg:
-      restore_cfgs.append(self._restore_checkpoint_cfg)
-    # 2. If no checkpoint provided, look for one in the model directory.
-    if self._restore_checkpoint_cfg is not None:
-      state_transforms_for_restore = [
-          functools.partial(fn, is_resuming=True)
-          for fn in self._restore_checkpoint_cfg.state_transformation_fns
-      ]
-    else:
-      state_transforms_for_restore = []
-    restore_cfgs.append(
-        utils.RestoreCheckpointConfig(
-            path=self._output_dir,
-            mode="latest",
-            dtype=self._save_checkpoint_cfg.dtype
-            if self._save_checkpoint_cfg
-            else "float32",
-            checkpointer_cls=self._save_checkpoint_cfg.checkpointer_cls
-            if self._save_checkpoint_cfg
-            else checkpoints.Checkpointer,
-            # Restore dataset state if it is being saved.
-            restore_dataset=(
-                self._save_checkpoint_cfg
-                and self._save_checkpoint_cfg.save_dataset
-            ),
-            state_transformation_fns=state_transforms_for_restore,
-        )
-    )
-
-    # Restore the model using a checkpoint.
-    valid_restore_cfg, restore_paths = (
-        utils.get_first_valid_restore_config_and_paths(restore_cfgs)
-    )
-    self._train_state = self._checkpoint_manager.restore(
-        restore_paths,
-        valid_restore_cfg,
-        utils.get_fallback_state(valid_restore_cfg, get_state, self._init_rng),
-    )
-
-    # 3. If no checkpoint to restore, init from scratch.
-    if self._train_state is None:
+    if from_scratch:
       self._train_state = self._train_state_initializer.from_scratch(
           self._init_rng
       )
+    else:
+      # 1. From a checkpoint specified by `self._restore_checkpoint_cfg.path`, if
+      # set.
+      if self._restore_checkpoint_cfg:
+        restore_cfgs.append(self._restore_checkpoint_cfg)
+      # 2. If no checkpoint provided, look for one in the model directory.
+      if self._restore_checkpoint_cfg is not None:
+        state_transforms_for_restore = [
+            functools.partial(fn, is_resuming=True)
+            for fn in self._restore_checkpoint_cfg.state_transformation_fns
+        ]
+      else:
+        state_transforms_for_restore = []
+      restore_cfgs.append(
+          utils.RestoreCheckpointConfig(
+              path=self._output_dir,
+              mode="latest",
+              dtype=self._save_checkpoint_cfg.dtype
+              if self._save_checkpoint_cfg
+              else "float32",
+              checkpointer_cls=self._save_checkpoint_cfg.checkpointer_cls
+              if self._save_checkpoint_cfg
+              else checkpoints.Checkpointer,
+              # Restore dataset state if it is being saved.
+              restore_dataset=(
+                  self._save_checkpoint_cfg
+                  and self._save_checkpoint_cfg.save_dataset
+              ),
+              state_transformation_fns=state_transforms_for_restore,
+          )
+      )
+
+      # Restore the model using a checkpoint.
+      valid_restore_cfg, restore_paths = (
+          utils.get_first_valid_restore_config_and_paths(restore_cfgs)
+      )
+      self._train_state = self._checkpoint_manager.restore(
+          restore_paths,
+          valid_restore_cfg,
+          utils.get_fallback_state(valid_restore_cfg, get_state, self._init_rng),
+      )
+
+      # 3. If no checkpoint to restore, init from scratch.
+      if self._train_state is None:
+        self._train_state = self._train_state_initializer.from_scratch(
+            self._init_rng
+        )
     self._train_state_axes = self._train_state_initializer.train_state_axes
 
     # Log the variable shapes information and write to a file.
@@ -542,10 +551,12 @@ class InteractiveModel(abc.ABC):
 
       # Get a chunk-specific RNG key.
       chunk_rng = jax.random.fold_in(jax.random.PRNGKey(0), chunk)
-
-      inferences = _extract_tokens_and_aux_values(
-          infer_fn(model_dataset.enumerate(), rng=chunk_rng)
-      )
+      
+      stime = time.time()
+      inferences = block_until_ready(infer_fn(model_dataset.enumerate(), rng=chunk_rng))
+      infer_time = time.time()-stime
+      
+      inferences = _extract_tokens_and_aux_values(inferences)
 
       predictions, aux_values = inferences
       accumulated_inferences = []
@@ -567,7 +578,7 @@ class InteractiveModel(abc.ABC):
         for key, values in aux_values.items():
           all_aux_values[key] += values
 
-    return all_inferences, all_aux_values
+    return all_inferences, all_aux_values,infer_time
 
   def predict_with_aux(
       self, examples: Sequence[Union[str, dict[str, str]]]

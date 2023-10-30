@@ -41,7 +41,7 @@ class T5Config:
   logits_via_embedding: bool = False
   # Whether to accumulate attention logits in float32 regardless of dtype.
   float32_attention_logits: bool = False
-
+  linformer : bool = False
 
 class EncoderLayer(nn.Module):
   """Transformer encoder layer."""
@@ -68,7 +68,9 @@ class EncoderLayer(nn.Module):
         head_dim=cfg.head_dim,
         dropout_rate=cfg.dropout_rate,
         float32_logits=cfg.float32_attention_logits,
-        name='attention')(
+        name='attention',
+        linformer=cfg.linformer
+        )(
             x, x, encoder_mask, encoder_bias, deterministic=deterministic)
     x = nn.Dropout(
         rate=cfg.dropout_rate, broadcast_dims=(-2,))(
@@ -125,7 +127,9 @@ class DecoderLayer(nn.Module):
         head_dim=cfg.head_dim,
         dropout_rate=cfg.dropout_rate,
         float32_logits=cfg.float32_attention_logits,
-        name='self_attention')(
+        name='self_attention',
+        linformer=cfg.linformer
+        )(
             x,
             x,
             decoder_mask,
@@ -147,7 +151,8 @@ class DecoderLayer(nn.Module):
         head_dim=cfg.head_dim,
         dropout_rate=cfg.dropout_rate,
         float32_logits=cfg.float32_attention_logits,
-        name='encoder_decoder_attention')(
+        name='encoder_decoder_attention',
+        linformer=cfg.linformer)(
             y, encoded, encoder_decoder_mask, deterministic=deterministic)
     y = nn.Dropout(
         rate=cfg.dropout_rate, broadcast_dims=(-2,))(
@@ -315,7 +320,6 @@ class Transformer(nn.Module):
               encoder_segment_ids,
               jnp.equal,
               dtype=cfg.dtype))
-
     return self.encoder(
         encoder_input_tokens, encoder_mask, deterministic=not enable_dropout)
 

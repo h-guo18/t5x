@@ -46,7 +46,34 @@ Initializer = Callable[[PRNGKey, Shape, DType], Array]
 
 default_embed_init = nn.initializers.variance_scaling(
     1.0, 'fan_in', 'normal', out_axis=0)
+# def get_EF(input_size, dim, method="no_params", head_dim=None, bias=True):
+#     """
+#     Retuns the E or F matrix, initialized via xavier initialization.
+#     This is the recommended way to do it according to the authors of the paper.
+#     Includes a method for convolution, as well as a method for no additional params.
+#     """
+#     assert method == "learnable" or method == "convolution" or method == "no_params", "The method flag needs to be either 'learnable', 'convolution', or 'no_params'!"
+#     if method == "convolution":
+#         conv = nn.Conv1d(head_dim, head_dim, kernel_size=int(input_size/dim), stride=int(input_size/dim))
+#         return conv
+#     if method == "no_params":
+#         ef_init=nn.initializers.glorot_normal()
+#         # mat = jnp.zeros((input_size, dim))
+#         # nn.init.normal_(mat, mean=0.0, std=1/dim)
+#         return ef_init(jax.random.PRNGKey(42),(input_size, dim),jnp.float32)
+#     lin = nn.Linear(input_size, dim, bias)
+#     nn.init.xavier_normal_(lin.weight)
+#     return lin
 
+
+def gen_causal_mask(input_size, dim_k, full_attention=False):
+    """
+    Generates a causal mask of size (input_size, dim_k) for linformer
+    Else, it generates (input_size, input_size) for full attention
+    """
+    if full_attention:
+        return (torch.triu(torch.ones(input_size, input_size))==1).transpose(0,1)
+    return (torch.triu(torch.ones(dim_k, input_size))==1).transpose(0,1)
 
 def dot_product_attention(query: Array,
                           key: Array,
@@ -56,7 +83,11 @@ def dot_product_attention(query: Array,
                           dropout_rate: float = 0.,
                           deterministic: bool = False,
                           dtype: DType = jnp.float32,
-                          float32_logits: bool = False):
+                          float32_logits: bool = False,
+                          linformer:bool = False,
+                          linformer_E = None,
+                          linformer_F = None
+                          ):
   """Computes dot-product attention given query, key, and value.
 
   This is the core function for applying attention based on
@@ -98,6 +129,8 @@ def dot_product_attention(query: Array,
 
   # `attn_weights`: [batch, num_heads, q_length, kv_length]
   attn_weights = jnp.einsum('bqhd,bkhd->bhqk', query, key)
+  # print("Shape of attn_weights:",attn_weights.shape)
+  # print("shape of attn_matrix:",attn_weights.shape)
 
   # Apply attention bias: masking, dropout, proximity bias, etc.
   if bias is not None:
@@ -148,6 +181,7 @@ class MultiHeadDotProductAttention(nn.Module):
   kernel_init: Initializer = nn.initializers.variance_scaling(
       1.0, 'fan_in', 'normal')
   float32_logits: bool = False  # computes logits in float32 for stability.
+  linformer:bool = False
 
   @nn.compact
   def __call__(self,
@@ -278,6 +312,12 @@ class MultiHeadDotProductAttention(nn.Module):
           # This is equivalent to bias[..., cur_index:cur_index+1, :].
           bias = dynamic_vector_slice_in_dim(
               jnp.squeeze(bias, axis=0), jnp.reshape(cur_index, (-1)), 1, -2)
+    
+    if self.linformer:
+      if mask is not None:
+        mask = mask[:,:,:,0][:,:,:,None]
+      if bias is not None:
+        bias = bias[:,:,:,0][:,:,:,None]
 
     # Convert the boolean attention mask to an attention bias.
     if mask is not None:
@@ -296,7 +336,16 @@ class MultiHeadDotProductAttention(nn.Module):
     dropout_rng = None
     if not deterministic and self.dropout_rate > 0.:
       dropout_rng = self.make_rng('dropout')
-
+    input_seqlen = key.shape[-3]
+    if self.linformer:
+      # print("key shape before projection:",key.shape)
+      linformer_E = nn.initializers.glorot_normal()(jax.random.PRNGKey(42),(key.shape[-3], 16),jnp.float32)
+      key = jnp.einsum("blhd,lk->bkhd",key,linformer_E)
+      # value = nn.DenseGeneral(32,axis=-3,use_bias=False,name="linformer_F")(value)
+      value = jnp.einsum("blhd,lk->bkhd",value,linformer_E)
+      # print("key shape after projection:",key.shape)
+    # linformer_E=nn.initializers.glorot_normal()(jax.random.PRNGKey(42),(input_seqlen, 16),jnp.float32)
+    # linformer_F = linformer_E
     # Apply attention.
     x = dot_product_attention(
         query,
@@ -307,7 +356,11 @@ class MultiHeadDotProductAttention(nn.Module):
         dropout_rate=self.dropout_rate,
         deterministic=deterministic,
         dtype=self.dtype,
-        float32_logits=self.float32_logits)
+        float32_logits=self.float32_logits,
+        linformer = self.linformer,
+        # linformer_E = linformer_E,
+        # linformer_F = linformer_F
+        )
 
     # Back to the original inputs dimensions.
     out = DenseGeneral(
