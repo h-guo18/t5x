@@ -53,7 +53,8 @@ class EncoderLayer(nn.Module):
     cfg = self.config
 
     # Relative position embedding as attention biases.
-    encoder_bias = self.relative_embedding(inputs.shape[-2], inputs.shape[-2],
+    kv_length = inputs.shape[-2] if not self.config.linformer else self.config.linformer_dim
+    encoder_bias = self.relative_embedding(inputs.shape[-2], kv_length,
                                            True)
 
     # Attention block.
@@ -128,7 +129,7 @@ class DecoderLayer(nn.Module):
         dropout_rate=cfg.dropout_rate,
         float32_logits=cfg.float32_attention_logits,
         name='self_attention',
-        linformer=cfg.linformer
+        linformer=False
         )(
             x,
             x,
@@ -152,7 +153,7 @@ class DecoderLayer(nn.Module):
         dropout_rate=cfg.dropout_rate,
         float32_logits=cfg.float32_attention_logits,
         name='encoder_decoder_attention',
-        linformer=cfg.linformer)(
+        linformer=False)(
             y, encoded, encoder_decoder_mask, deterministic=deterministic)
     y = nn.Dropout(
         rate=cfg.dropout_rate, broadcast_dims=(-2,))(
@@ -320,6 +321,8 @@ class Transformer(nn.Module):
               encoder_segment_ids,
               jnp.equal,
               dtype=cfg.dtype))
+    if self.config.linformer:
+        encoder_mask = encoder_mask[:,:,:,:self.config.linformer_dim]
     return self.encoder(
         encoder_input_tokens, encoder_mask, deterministic=not enable_dropout)
 

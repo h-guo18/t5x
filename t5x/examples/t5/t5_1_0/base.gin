@@ -53,3 +53,4 @@ network.T5Config:
   mlp_activations = ('relu',)
   dropout_rate = %DROPOUT_RATE
   logits_via_embedding = True
+  linformer=True
