@@ -42,6 +42,7 @@ class T5Config:
   # Whether to accumulate attention logits in float32 regardless of dtype.
   float32_attention_logits: bool = False
   linformer : bool = False
+  linformer_dim:int = 16
 
 class EncoderLayer(nn.Module):
   """Transformer encoder layer."""
@@ -321,6 +322,7 @@ class Transformer(nn.Module):
               encoder_segment_ids,
               jnp.equal,
               dtype=cfg.dtype))
+    #truncate encoder_mask shape
     if self.config.linformer:
         encoder_mask = encoder_mask[:,:,:,:self.config.linformer_dim]
     return self.encoder(

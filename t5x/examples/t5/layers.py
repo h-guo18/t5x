@@ -58,8 +58,6 @@ def dot_product_attention(query: Array,
                           dtype: DType = jnp.float32,
                           float32_logits: bool = False,
                           linformer:bool = False,
-                          linformer_E = None,
-                          linformer_F = None
                           ):
   """Computes dot-product attention given query, key, and value.
 
