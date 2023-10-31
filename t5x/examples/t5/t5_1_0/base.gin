@@ -15,6 +15,7 @@ LABEL_SMOOTHING = 0.0
 LOSS_NORMALIZING_FACTOR = None
 # Dropout should be specified in the "run" files
 DROPOUT_RATE = %gin.REQUIRED
+LINFORMER = %gin.REQUIRED
 
 # Vocabulary (shared by encoder and decoder)
 VOCABULARY = @seqio.SentencePieceVocabulary()
@@ -53,4 +54,5 @@ network.T5Config:
   mlp_activations = ('relu',)
   dropout_rate = %DROPOUT_RATE
   logits_via_embedding = True
-  linformer=True
+  linformer=%LINFORMER
+  linformer_dim = 64

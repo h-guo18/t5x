@@ -42,7 +42,7 @@ class T5Config:
   # Whether to accumulate attention logits in float32 regardless of dtype.
   float32_attention_logits: bool = False
   linformer : bool = False
-  linformer_dim:int = 16
+  linformer_dim:int = 64
 
 class EncoderLayer(nn.Module):
   """Transformer encoder layer."""
@@ -54,6 +54,7 @@ class EncoderLayer(nn.Module):
     cfg = self.config
 
     # Relative position embedding as attention biases.
+    # kv_length = inputs.shape[-2]
     kv_length = inputs.shape[-2] if not self.config.linformer else self.config.linformer_dim
     encoder_bias = self.relative_embedding(inputs.shape[-2], kv_length,
                                            True)
@@ -71,9 +72,13 @@ class EncoderLayer(nn.Module):
         dropout_rate=cfg.dropout_rate,
         float32_logits=cfg.float32_attention_logits,
         name='attention',
-        linformer=cfg.linformer
+        linformer=cfg.linformer,
+        linformer_dim = cfg.linformer_dim,
+        attn_type="self-attn"
         )(
-            x, x, encoder_mask, encoder_bias, deterministic=deterministic)
+            x, x, encoder_mask, encoder_bias, deterministic=deterministic,
+            kvmask=encoder_mask[:,:,:,0][:,:,:,None]#(batch,1,length,1)
+            )
     x = nn.Dropout(
         rate=cfg.dropout_rate, broadcast_dims=(-2,))(
             x, deterministic=deterministic)
@@ -314,6 +319,8 @@ class Transformer(nn.Module):
     encoder_mask = layers.make_attention_mask(
         encoder_input_tokens > 0, encoder_input_tokens > 0, dtype=cfg.dtype)
     # Add segmentation block-diagonal attention mask if using segmented data.
+    if self.config.linformer:
+        assert encoder_segment_ids is None, "in linformer setting, must not use packing."
     if encoder_segment_ids is not None:
       encoder_mask = layers.combine_masks(
           encoder_mask,
@@ -323,8 +330,6 @@ class Transformer(nn.Module):
               jnp.equal,
               dtype=cfg.dtype))
     #truncate encoder_mask shape
-    if self.config.linformer:
-        encoder_mask = encoder_mask[:,:,:,:self.config.linformer_dim]
     return self.encoder(
         encoder_input_tokens, encoder_mask, deterministic=not enable_dropout)
 
@@ -381,6 +386,8 @@ class Transformer(nn.Module):
         decoder_positions=decoder_positions,
         decoder_mask=decoder_mask,
         encoder_decoder_mask=encoder_decoder_mask,
+        qmask = qmask,
+        kvmask = kvmask,
         deterministic=not enable_dropout,
         decode=decode,
         max_decode_length=max_decode_length)

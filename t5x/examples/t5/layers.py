@@ -153,13 +153,16 @@ class MultiHeadDotProductAttention(nn.Module):
       1.0, 'fan_in', 'normal')
   float32_logits: bool = False  # computes logits in float32 for stability.
   linformer:bool = False
-  linformer_dim:int = 16
+  linformer_dim:int = 64
+  attn_type: str = "self-attn"
 
   @nn.compact
   def __call__(self,
                inputs_q: Array,
                inputs_kv: Array,
                mask: Optional[Array] = None,
+               qmask:Optional[Array] = None,
+               kvmask:Optional[Array] = None,
                bias: Optional[Array] = None,
                *,
                decode: bool = False,
@@ -214,7 +217,6 @@ class MultiHeadDotProductAttention(nn.Module):
     query = with_sharding_constraint(query, ('batch', 'length', 'heads', 'kv'))
     key = with_sharding_constraint(key, ('batch', 'length', 'heads', 'kv'))
     value = with_sharding_constraint(value, ('batch', 'length', 'heads', 'kv'))
-
     if decode:
       # Detect if we're initializing by absence of existing cache data.
       is_initialized = self.has_variable('cache', 'cached_key')
@@ -285,7 +287,23 @@ class MultiHeadDotProductAttention(nn.Module):
           bias = dynamic_vector_slice_in_dim(
               jnp.squeeze(bias, axis=0), jnp.reshape(cur_index, (-1)), 1, -2)
     
-
+    
+    if self.linformer:
+      mask=None # use qmask/ kvmask instead
+      assert self.attn_type in ["self-attn","cross-attn","self-attn-causal"], f"invalid attn_type: {self.attn_type }"
+      
+      if self.attn_type  == "self-attn":
+        #kvmask: in shape (batch,1,length,1)
+        kvmask = jnp.einsum("bhld->blhd",kvmask) # (batch,length,1,1)
+        key = key* kvmask
+        value = value* kvmask
+      elif self.attn_type  == "cross-attn":
+        pass
+        
+        
+      # key = jnp.einsum("blhd,bhl->blhd",key,mask)
+      # value = jnp.einsum("blhd,bhl->blhd",value,mask)
+      
     # Convert the boolean attention mask to an attention bias.
     if mask is not None:
       # attention mask in the form of attention bias
@@ -303,9 +321,7 @@ class MultiHeadDotProductAttention(nn.Module):
     dropout_rng = None
     if not deterministic and self.dropout_rate > 0.:
       dropout_rng = self.make_rng('dropout')
-    input_seqlen = key.shape[-3]
-    
-  
+
     if self.linformer:
       #E=F
       linformer_EF = nn.initializers.glorot_normal()(jax.random.PRNGKey(42),(key.shape[-3], self.linformer_dim),jnp.float32)
