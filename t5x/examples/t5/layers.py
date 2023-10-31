@@ -154,15 +154,12 @@ class MultiHeadDotProductAttention(nn.Module):
   float32_logits: bool = False  # computes logits in float32 for stability.
   linformer:bool = False
   linformer_dim:int = 16
-  attn_type: str = "self-attn"
 
   @nn.compact
   def __call__(self,
                inputs_q: Array,
                inputs_kv: Array,
                mask: Optional[Array] = None,
-               qmask:Optional[Array] = None,
-               kvmask:Optional[Array] = None,
                bias: Optional[Array] = None,
                *,
                decode: bool = False,
@@ -289,26 +286,14 @@ class MultiHeadDotProductAttention(nn.Module):
     
     
     if self.linformer:
-      mask=None # use qmask/ kvmask instead
-      assert self.attn_type in ["self-attn","cross-attn","self-attn-causal"], f"invalid attn_type: {self.attn_type }"
-      
-      if self.attn_type  == "self-attn":
-        #kvmask: in shape (batch,1,length,1)
-        kvmask = jnp.einsum("bhld->blhd",kvmask) # (batch,length,1,1)
-        key = key* kvmask
-        value = value* kvmask
-      elif self.attn_type  == "cross-attn":
-        kvmask = jnp.einsum("bhld->blhd",kvmask) # (batch,length,1,1)
-        qmask = jnp.einsum("bhld->blhd",qmask) # (batch,length,1,1)
-        key = key* kvmask
-        value = value* kvmask
-        query = query* qmask
-        
-        
-        
-        
+      #mask : (batch, 1, length, length)
+      mask = mask[:,:,:,0][:,:,:,None] #(batch,1,length,1)
+      mask = jnp.einsum("bhld->blhd",mask) # (batch,length,1,1)
+      key = key * mask
+      value = value * mask
       # key = jnp.einsum("blhd,bhl->blhd",key,mask)
       # value = jnp.einsum("blhd,bhl->blhd",value,mask)
+      mask=None
       
     # Convert the boolean attention mask to an attention bias.
     if mask is not None:
