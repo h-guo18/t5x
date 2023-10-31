@@ -153,7 +153,7 @@ class MultiHeadDotProductAttention(nn.Module):
       1.0, 'fan_in', 'normal')
   float32_logits: bool = False  # computes logits in float32 for stability.
   linformer:bool = False
-  linformer_dim:int = 64
+  linformer_dim:int = 16
   attn_type: str = "self-attn"
 
   @nn.compact
@@ -298,7 +298,13 @@ class MultiHeadDotProductAttention(nn.Module):
         key = key* kvmask
         value = value* kvmask
       elif self.attn_type  == "cross-attn":
-        pass
+        kvmask = jnp.einsum("bhld->blhd",kvmask) # (batch,length,1,1)
+        qmask = jnp.einsum("bhld->blhd",qmask) # (batch,length,1,1)
+        key = key* kvmask
+        value = value* kvmask
+        query = query* qmask
+        
+        
         
         
       # key = jnp.einsum("blhd,bhl->blhd",key,mask)

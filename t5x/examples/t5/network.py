@@ -42,7 +42,7 @@ class T5Config:
   # Whether to accumulate attention logits in float32 regardless of dtype.
   float32_attention_logits: bool = False
   linformer : bool = False
-  linformer_dim:int = 64
+  linformer_dim:int = 16
 
 class EncoderLayer(nn.Module):
   """Transformer encoder layer."""
@@ -113,6 +113,8 @@ class DecoderLayer(nn.Module):
                encoded,
                decoder_mask=None,
                encoder_decoder_mask=None,
+               kvmask=None,
+               qmask=None,
                deterministic=False,
                decode=False,
                max_decode_length=None):
@@ -159,8 +161,10 @@ class DecoderLayer(nn.Module):
         dropout_rate=cfg.dropout_rate,
         float32_logits=cfg.float32_attention_logits,
         name='encoder_decoder_attention',
-        linformer=False)(
-            y, encoded, encoder_decoder_mask, deterministic=deterministic)
+        linformer=False,
+        attn_type="cross-attn"
+        )(
+            y, encoded, encoder_decoder_mask,kvmask=kvmask,qmask=qmask,deterministic=deterministic)
     y = nn.Dropout(
         rate=cfg.dropout_rate, broadcast_dims=(-2,))(
             y, deterministic=deterministic)
@@ -233,6 +237,8 @@ class Decoder(nn.Module):
                decoder_positions=None,
                decoder_mask=None,
                encoder_decoder_mask=None,
+               kvmask=None,
+               qmask=None,
                deterministic=False,
                decode=False,
                max_decode_length=None):
@@ -262,6 +268,8 @@ class Decoder(nn.Module):
               encoded,
               decoder_mask=decoder_mask,
               encoder_decoder_mask=encoder_decoder_mask,
+              kvmask=kvmask,
+              qmask=qmask,
               deterministic=deterministic,
               decode=decode,
               max_decode_length=max_decode_length)
@@ -357,6 +365,8 @@ class Transformer(nn.Module):
           jnp.ones_like(decoder_target_tokens),
           encoder_input_tokens > 0,
           dtype=cfg.dtype)
+      kvmask=None
+      qmask=None
     else:
       decoder_mask = layers.make_decoder_mask(
           decoder_target_tokens=decoder_target_tokens,
@@ -364,6 +374,15 @@ class Transformer(nn.Module):
           decoder_segment_ids=decoder_segment_ids)
       encoder_decoder_mask = layers.make_attention_mask(
           decoder_target_tokens > 0, encoder_input_tokens > 0, dtype=cfg.dtype)
+      kvmask=layers.make_attention_mask(
+          jnp.ones_like(encoder_input_tokens),
+          encoder_input_tokens > 0,
+          dtype=cfg.dtype)
+      qmask = layers.make_attention_mask(
+          jnp.ones_like(decoder_target_tokens),
+          decoder_target_tokens > 0,
+          dtype=cfg.dtype)
+      
 
     # Add segmentation block-diagonal attention masks if using segmented data.
     if encoder_segment_ids is not None:
