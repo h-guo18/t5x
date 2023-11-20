@@ -55,4 +55,6 @@ network.T5Config:
   dropout_rate = %DROPOUT_RATE
   logits_via_embedding = True
   linformer=%LINFORMER
-  linformer_dim = 16
+  linformer_dim = %LINFORMERDIM
+  kernel_method = %KERNELMETHOD
+  absolute_positional_embedding = %ABSOLUTE_PE

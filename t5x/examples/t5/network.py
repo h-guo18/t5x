@@ -21,6 +21,8 @@ from flax import struct
 import jax.numpy as jnp
 from t5x.examples.t5 import layers
 
+from jax.config import config
+# config.update('jax_disable_jit', True)
 
 @struct.dataclass
 class T5Config:
@@ -42,7 +44,9 @@ class T5Config:
   # Whether to accumulate attention logits in float32 regardless of dtype.
   float32_attention_logits: bool = False
   linformer : bool = False
-  linformer_dim:int = 16
+  linformer_dim:int = 128 #projection dim of linformer
+  kernel_method:bool = False # whether or not use kernel method
+  absolute_positional_embedding:bool = False # if False, use relative postional encoding
 
 class EncoderLayer(nn.Module):
   """Transformer encoder layer."""
@@ -50,7 +54,7 @@ class EncoderLayer(nn.Module):
   relative_embedding: nn.Module
 
   @nn.compact
-  def __call__(self, inputs, encoder_mask=None, deterministic=False):
+  def __call__(self, inputs, encoder_mask=None, deterministic=False, layer_idx = -1):
     cfg = self.config
 
     # Relative position embedding as attention biases.
@@ -58,6 +62,9 @@ class EncoderLayer(nn.Module):
     kv_length = inputs.shape[-2] if not self.config.linformer else self.config.linformer_dim
     encoder_bias = self.relative_embedding(inputs.shape[-2], kv_length,
                                            True)
+    if cfg.absolute_positional_embedding:
+        #when using absolute positional embedding, set relative bias to zero
+        encoder_bias = jnp.zeros_like(encoder_bias)
 
     # Attention block.
     assert inputs.ndim == 3
@@ -73,9 +80,11 @@ class EncoderLayer(nn.Module):
         float32_logits=cfg.float32_attention_logits,
         name='attention',
         linformer=cfg.linformer,
-        linformer_dim = cfg.linformer_dim
+        linformer_dim = cfg.linformer_dim,
+        kernel_method = cfg.kernel_method,
+        attn_type= "self-attn"
         )(
-            x, x, encoder_mask, encoder_bias, deterministic=deterministic)
+            x, x, encoder_mask, encoder_bias, E_key=layer_idx+10,F_key=layer_idx+100,deterministic=deterministic)
     x = nn.Dropout(
         rate=cfg.dropout_rate, broadcast_dims=(-2,))(
             x, deterministic=deterministic)
@@ -110,14 +119,19 @@ class DecoderLayer(nn.Module):
                encoded,
                decoder_mask=None,
                encoder_decoder_mask=None,
+               kvmask=None,
+               qmask=None,
+               layer_idx:int = -1, # for generating linfomrer projection RNG
                deterministic=False,
                decode=False,
                max_decode_length=None):
     cfg = self.config
 
-    # Relative position embedding as attention biases.
+    # Relative position embedding as attention biases.   
     l = max_decode_length if decode and max_decode_length else inputs.shape[-2]
     decoder_bias = self.relative_embedding(l, l, False)
+    if cfg.absolute_positional_embedding:
+        decoder_bias = jnp.zeros_like(decoder_bias)
 
     # inputs: embedded inputs to the decoder with shape [batch, length, emb_dim]
     x = layers.LayerNorm(
@@ -132,12 +146,16 @@ class DecoderLayer(nn.Module):
         dropout_rate=cfg.dropout_rate,
         float32_logits=cfg.float32_attention_logits,
         name='self_attention',
-        linformer=False
+        attn_type = "self-attn-causal",
+        linformer=False,
+        # kernel_method = cfg.kernel_method
         )(
             x,
             x,
             decoder_mask,
             decoder_bias,
+            kvmask= kvmask,
+            qmask= qmask,
             deterministic=deterministic,
             decode=decode)
     x = nn.Dropout(
@@ -156,12 +174,16 @@ class DecoderLayer(nn.Module):
         dropout_rate=cfg.dropout_rate,
         float32_logits=cfg.float32_attention_logits,
         name='encoder_decoder_attention',
-        linformer=False)(
-            y, encoded, encoder_decoder_mask, deterministic=deterministic)
+        attn_type="cross-attn",
+        linformer=False,
+        linformer_dim = cfg.linformer_dim,
+        # kernel_method = cfg.kernel_method
+        )(
+            y, encoded, encoder_decoder_mask, kvmask=kvmask,qmask=qmask,E_key=layer_idx+10,F_key=layer_idx+100,deterministic=deterministic)
     y = nn.Dropout(
         rate=cfg.dropout_rate, broadcast_dims=(-2,))(
             y, deterministic=deterministic)
-    y = y + x
+    y = y + x 
 
     # MLP block.
     z = layers.LayerNorm(dtype=cfg.dtype, name='pre_mlp_layer_norm')(y)
@@ -203,6 +225,11 @@ class Encoder(nn.Module):
 
     # [batch, length] -> [batch, length, emb_dim]
     x = self.shared_embedding(encoder_input_tokens.astype('int32'))
+    
+    if cfg.absolute_positional_embedding:
+        #apply absolute postional embedding at the begin of encoder
+        x = layers.absolute_positional_embedding(x,start_position=0,d_model=cfg.emb_dim,dtype=cfg.dtype)
+    
     x = nn.Dropout(
         rate=cfg.dropout_rate, broadcast_dims=(-2,))(
             x, deterministic=deterministic)
@@ -212,7 +239,7 @@ class Encoder(nn.Module):
       # [batch, length, emb_dim] -> [batch, length, emb_dim]
       x = EncoderLayer(
           config=cfg, relative_embedding=rel_emb,
-          name=f'layers_{lyr}')(x, encoder_mask, deterministic)
+          name=f'layers_{lyr}')(x, encoder_mask, deterministic,layer_idx=lyr)
 
     x = layers.LayerNorm(dtype=cfg.dtype, name='encoder_norm')(x)
     return nn.Dropout(rate=cfg.dropout_rate)(x, deterministic=deterministic)
@@ -230,6 +257,8 @@ class Decoder(nn.Module):
                decoder_positions=None,
                decoder_mask=None,
                encoder_decoder_mask=None,
+               kvmask=None,
+               qmask=None,
                deterministic=False,
                decode=False,
                max_decode_length=None):
@@ -246,6 +275,11 @@ class Decoder(nn.Module):
 
     # [batch, length] -> [batch, length, emb_dim]
     y = self.shared_embedding(decoder_input_tokens.astype('int32'))
+    
+    if cfg.absolute_positional_embedding:
+        #apply absolute positional encoding at the input of decoder
+        y = layers.absolute_positional_embedding(y,start_position=0,d_model=cfg.emb_dim,dtype=cfg.dtype)
+        
     y = nn.Dropout(
         rate=cfg.dropout_rate, broadcast_dims=(-2,))(
             y, deterministic=deterministic)
@@ -259,6 +293,9 @@ class Decoder(nn.Module):
               encoded,
               decoder_mask=decoder_mask,
               encoder_decoder_mask=encoder_decoder_mask,
+              kvmask=kvmask,
+              qmask=qmask,
+              layer_idx=lyr,
               deterministic=deterministic,
               decode=decode,
               max_decode_length=max_decode_length)
@@ -354,6 +391,7 @@ class Transformer(nn.Module):
           jnp.ones_like(decoder_target_tokens),
           encoder_input_tokens > 0,
           dtype=cfg.dtype)
+      qmask=None
     else:
       decoder_mask = layers.make_decoder_mask(
           decoder_target_tokens=decoder_target_tokens,
@@ -361,8 +399,18 @@ class Transformer(nn.Module):
           decoder_segment_ids=decoder_segment_ids)
       encoder_decoder_mask = layers.make_attention_mask(
           decoder_target_tokens > 0, encoder_input_tokens > 0, dtype=cfg.dtype)
+      qmask= layers.make_attention_mask(
+          decoder_target_tokens > 0,
+          decoder_target_tokens > 0,
+          dtype=cfg.dtype)
+    #no matter decoder or not, kv mask (i.e. input mask) is the same
+    kvmask=layers.make_attention_mask(
+          encoder_input_tokens > 0,
+          encoder_input_tokens > 0,
+          dtype=cfg.dtype)
 
     # Add segmentation block-diagonal attention masks if using segmented data.
+    assert encoder_segment_ids is None, "Should not have input packing here."
     if encoder_segment_ids is not None:
       if decode:
         raise ValueError(
@@ -383,6 +431,8 @@ class Transformer(nn.Module):
         decoder_positions=decoder_positions,
         decoder_mask=decoder_mask,
         encoder_decoder_mask=encoder_decoder_mask,
+        kvmask=kvmask,
+        qmask=qmask,
         deterministic=not enable_dropout,
         decode=decode,
         max_decode_length=max_decode_length)

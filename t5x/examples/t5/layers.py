@@ -15,11 +15,11 @@
 """Dense attention classes and mask/weighting functions."""
 
 # pylint: disable=attribute-defined-outside-init,g-bare-generic
-
 import dataclasses
 import functools
 import operator
 from typing import Any, Callable, Iterable, Optional, Sequence, Tuple, Union
+import math
 
 from flax import linen as nn
 from flax.linen import partitioning as nn_partitioning
@@ -28,7 +28,10 @@ from jax import lax
 from jax import random
 import jax.numpy as jnp
 import numpy as np
+from .fast_attention import make_fast_generalized_attention
 printfile = open('print.txt', 'w')
+from jax.config import config
+# config.update('jax_disable_jit', True)
 
 # from flax.linen.partitioning import param_with_axes, with_sharding_constraint
 param_with_axes = nn_partitioning.param_with_axes
@@ -57,7 +60,8 @@ def dot_product_attention(query: Array,
                           deterministic: bool = False,
                           dtype: DType = jnp.float32,
                           float32_logits: bool = False,
-                          linformer:bool = False,
+                          attn_type:str='self-attn', #for visualize only
+                          **kwargs
                           ):
   """Computes dot-product attention given query, key, and value.
 
@@ -109,6 +113,18 @@ def dot_product_attention(query: Array,
 
   # Normalize the attention weights across `kv_length` dimension.
   attn_weights = jax.nn.softmax(attn_weights).astype(dtype)
+  # breakpoint()
+  # print(type(attn_weights))
+  # try:
+  #   _,svs,_ = jax.numpy.linalg.svd(attn_weights.primal.astype(jnp.float32))
+  #   # print(svs)
+  #   with open(f'{attn_type}.json','a') as file:
+  #     svs = svs.tolist()
+  #     file.write(json.dumps(svs))
+  #     file.write('\n')
+      
+  # except:
+  #   pass
 
   # Apply attention dropout.
   if not deterministic and dropout_rate > 0.:
@@ -147,13 +163,15 @@ class MultiHeadDotProductAttention(nn.Module):
 
   num_heads: int
   head_dim: int
+  attn_type: str
   dtype: DType = jnp.float32
   dropout_rate: float = 0.
   kernel_init: Initializer = nn.initializers.variance_scaling(
       1.0, 'fan_in', 'normal')
   float32_logits: bool = False  # computes logits in float32 for stability.
   linformer:bool = False
-  linformer_dim:int = 16
+  kernel_method:bool = False
+  linformer_dim:int = 128
 
   @nn.compact
   def __call__(self,
@@ -161,6 +179,10 @@ class MultiHeadDotProductAttention(nn.Module):
                inputs_kv: Array,
                mask: Optional[Array] = None,
                bias: Optional[Array] = None,
+               kvmask:Optional[Array] = None,
+               qmask:Optional[Array] = None,
+               E_key:int = 42,
+               F_key:int = 42,
                *,
                decode: bool = False,
                deterministic: bool = False) -> Array:
@@ -265,7 +287,19 @@ class MultiHeadDotProductAttention(nn.Module):
         # Causal mask for cached decoder self-attention: our single query
         # position should only attend to those key positions that have already
         # been generated and cached, not the remaining zero elements.
-        mask = combine_masks(
+        if self.linformer:
+          mask = combine_masks(
+            mask,
+            jnp.broadcast_to(
+                #NOTE: See if this has causal leak
+                jnp.arange(self.linformer_dim) <= cur_index,
+                # (1, 1, length) represent (head dim, query length, key length)
+                # query length is 1 because during decoding we deal with one
+                # index.
+                # The same mask is applied to all batch elements and heads.
+                (batch, 1, 1, self.linformer_dim)))
+        else:
+          mask = combine_masks(
             mask,
             jnp.broadcast_to(
                 jnp.arange(length) <= cur_index,
@@ -285,16 +319,41 @@ class MultiHeadDotProductAttention(nn.Module):
               jnp.squeeze(bias, axis=0), jnp.reshape(cur_index, (-1)), 1, -2)
     
     
-    if self.linformer:
-      #mask : (batch, 1, length, length)
-      mask = mask[:,:,:,0][:,:,:,None] #(batch,1,length,1)
-      mask = jnp.einsum("bhld->blhd",mask) # (batch,length,1,1)
-      key = key * mask
-      value = value * mask
-      # key = jnp.einsum("blhd,bhl->blhd",key,mask)
-      # value = jnp.einsum("blhd,bhl->blhd",value,mask)
-      mask=None
+    assert self.attn_type in ["self-attn","cross-attn","self-attn-causal"], f"invalid attn_type: {self.attn_type }"
+    if self.kernel_method:
+        mask = mask[:,:,:,0:1]
+        kvmask = jnp.einsum("bhld->blhd",mask)
+        value = value * kvmask
+        mask=None
       
+    if self.linformer:
+      if self.attn_type == "self-attn":
+        #mask : (batch, 1, length, length)
+        mask = mask[:,:,:,0:1] #(batch,1,length,1)
+        kvmask = jnp.einsum("bhld->blhd",mask) # (batch,length,1,1)
+        key = key * kvmask
+        value = value * kvmask
+        mask=None
+      elif self.attn_type == "cross-attn":
+        kvmask = jnp.einsum("bhld->blhd",kvmask[:,:,:,0:1])
+        key = key * kvmask
+        value = value * kvmask
+        if qmask is not None:
+          qmask = jnp.einsum("bhld->blhd",qmask[:,:,:,0:1])
+          query = query * qmask
+        mask=None
+      elif self.attn_type == "self-attn-causal":
+        if qmask is not None:
+          qmask = jnp.einsum("bhld->blhd",qmask[:,:,:,0:1])
+          query = query * qmask
+        if not decode:
+          kvmask = jnp.einsum("bhld->blhd",kvmask[:,:,:,0:1])
+          key = key * kvmask
+          value = value * kvmask
+          causal_mask = jnp.tril(jnp.ones((query.shape[0],1,query.shape[-3],self.linformer_dim)))
+          mask = causal_mask
+          # mask = None
+        
     # Convert the boolean attention mask to an attention bias.
     if mask is not None:
       # attention mask in the form of attention bias
@@ -315,12 +374,26 @@ class MultiHeadDotProductAttention(nn.Module):
 
     if self.linformer:
       #E=F
-      linformer_EF = nn.initializers.glorot_normal()(jax.random.PRNGKey(42),(key.shape[-3], self.linformer_dim),jnp.float32)
+      # linformer_E = self.param('E',nn.initializers.glorot_normal(dtype=jnp.float32),(key.shape[-3], self.linformer_dim))
+      # linformer_E = nn.initializers.glorot_normal()(jax.random.PRNGKey(E_key),(key.shape[-2],key.shape[-3], self.linformer_dim),jnp.float32)
+      # linformer_F = nn.initializers.glorot_normal()(jax.random.PRNGKey(F_key),(key.shape[-2],key.shape[-3], self.linformer_dim),jnp.float32)
+      linformer_E = nn.initializers.glorot_normal()(jax.random.PRNGKey(42),(key.shape[-3], self.linformer_dim),self.dtype)
+
       #project key and value to shape [batch, linformer_k, head, depth]
-      key = jnp.einsum("blhd,lk->bkhd",key,linformer_EF)
-      value = jnp.einsum("blhd,lk->bkhd",value,linformer_EF)
-      
-    x = dot_product_attention(
+      key = jnp.einsum("blhd,lk->bkhd",key,linformer_E)
+      value = jnp.einsum("blhd,lk->bkhd",value,linformer_E)
+      # key = jnp.einsum("blhd,hlk->bkhd",key,linformer_E)
+      # value = jnp.einsum("blhd,hlk->bkhd",value,linformer_E)
+
+    if self.kernel_method:
+      attn_fn = make_fast_generalized_attention(qkv_dim=self.head_dim,
+                                               
+                                            unidirectional=(self.attn_type == 'self-attn-causal'),
+                                            lax_scan_unroll = 64
+                                            )
+    else:
+      attn_fn = dot_product_attention
+    x = attn_fn(
         query,
         key,
         value,
@@ -329,10 +402,8 @@ class MultiHeadDotProductAttention(nn.Module):
         dropout_rate=self.dropout_rate,
         deterministic=deterministic,
         dtype=self.dtype,
-        float32_logits=self.float32_logits,
-        linformer = self.linformer,
-        # linformer_E = linformer_E,
-        # linformer_F = linformer_F
+        # float32_logits=self.float32_logits,
+        # attn_type=self.attn_type
         )
 
     # Back to the original inputs dimensions.
@@ -544,7 +615,18 @@ class Embed(nn.Module):
     dtype = self.attend_dtype if self.attend_dtype is not None else self.dtype
     return jnp.dot(query, jnp.asarray(self.embedding, dtype).T)
 
-
+def absolute_positional_embedding(x,start_position,d_model,max_len=5000,dtype=jnp.float16):
+    # Create matrix of [SeqLen, HiddenDim] representing the positional encoding for max_len inputs
+    pe = jnp.zeros((max_len, d_model))
+    position = jnp.arange(0, max_len, dtype=dtype)[:,None]
+    div_term = jnp.exp(jnp.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+    pe.at[:, 0::2].set(jnp.sin(position * div_term))
+    pe.at[:, 1::2].set(jnp.cos(position * div_term))
+    pe = jnp.array(pe[None])
+    pe = jax.device_put(pe)
+    x = x + pe[:,start_position:start_position+x.shape[1]]
+    return x
+      
 class RelativePositionBiases(nn.Module):
   """Adds T5-style relative positional embeddings to the attention logits.
 
