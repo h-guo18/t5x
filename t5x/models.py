@@ -510,6 +510,7 @@ class EncoderDecoderModel(BaseTransformerModel):
         max_decode_length=max_decode_length,
         mutable=['cache'],
         method=self.module.decode,
+        decode_positional_encoding_index = decoding_state.cur_index
     )
     # Remove sequence length dimension since it's always 1 during decoding.
     flat_logits = jnp.squeeze(flat_logits, axis=1)
@@ -549,6 +550,7 @@ class EncoderDecoderModel(BaseTransformerModel):
         mutable=['cache'],
         decode=True,
         enable_dropout=False,
+        decode_positional_encoding_index=0
     )
 
     cache = initial_variables['cache']

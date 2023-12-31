@@ -24,6 +24,9 @@ from t5x.interactive_model import InteractiveModel
 from t5x.interactive_model import get_batches_from_seqio
 from t5x.interactive_model import InferenceType
 import logging
+from jax.config import config
+from tqdm import tqdm
+# config.update('jax_disable_jit', True)
 
 print("jax local devices:",jax.local_devices())
 loggers = [logging.getLogger(name) for name in logging.root.manager.loggerDict]
@@ -49,22 +52,25 @@ partitioner=partitioning.PjitPartitioner(
         num_partitions=1,
         model_parallel_submesh=None)
 
-with open("data_for_speedtest.json") as f:
-    examples_of_lengths = json.load(f)
+# with open("data_for_speedtest.json") as f:
+#     examples_of_lengths = json.load(f)
 start_t = time.time()
 print("mark:start!")
 last_t = start_t
     
 batch_size=1
 # res = []
-for modelname in ["t5-linformer","t5-vanilla"]:
-    for length in examples_of_lengths:
-        if int(length) < 40000 : continue
-        examples = [examples_of_lengths[length]]*batch_size
-        print("length sum:",length)
-        input_length = len(examples[0]["input"].split(" "))
-        target_length=len(examples[0]["target"].split(" "))
-        decode_fn=functools.partial(t5x.decoding.temperature_sample, temperature=1.0, topk=40,max_decode_steps = 1)
+for modelname in ["lin+ker","kernel","linformer","vanilla"]:
+# for modelname in ["t5-vanilla"]:
+    for l in tqdm(range(11000,14000,1000)):
+    # for length in ['1072']:
+        # examples = [examples_of_lengths[length]]*batch_size
+        print("input and output length:",l)
+        # input_length = len(examples[0]["input"].split(" "))
+        # target_length=len(examples[0]["target"].split(" "))
+        decode_fn=functools.partial(t5x.decoding.temperature_sample, temperature=1.0, topk=40
+                                    ,max_decode_steps = 1
+                                    )
 
         # Define a model using the minimal T5 module.
         t5_module = network.Transformer(config=network.T5Config(
@@ -79,7 +85,8 @@ for modelname in ["t5-linformer","t5-vanilla"]:
             mlp_activations=('relu',),
             dropout_rate=0.0,
             logits_via_embedding=True,
-            linformer= (modelname=="t5-linformer")
+            linformer= ("lin"in modelname),
+            kernel_method = ("ker" in modelname)
             ))
         model = t5x.models.EncoderDecoderModel(
             module=t5_module,
@@ -87,46 +94,90 @@ for modelname in ["t5-linformer","t5-vanilla"]:
             output_vocabulary=VOCABULARY,
             optimizer_def=optimizer,
             decode_fn=decode_fn)
+        decoder_len = l
+        fake_encoder_inputs = jnp.ones((1,l))
+        fake_decoder_inputs = jnp.ones((1,decoder_len))
+        fake_decoder_inputs = jnp.ones((1,decoder_len))
+        print("initializing model")
+        variables = t5_module.init(rngs= jax.random.PRNGKey(42),encoder_input_tokens=fake_encoder_inputs,decoder_input_tokens=fake_decoder_inputs,decoder_target_tokens=fake_decoder_inputs)
         
-        task_feature_lengths = {'inputs': input_length, 'targets': target_length}
-        output_dir='/tmp/output_dir'
-        input_shapes = {
-            'encoder_input_tokens': np.array([batch_size, input_length]),
-            'decoder_target_tokens': np.array([batch_size, target_length]),
-            'decoder_input_tokens': np.array([batch_size, target_length]),
-            'decoder_loss_weights': np.array([batch_size, target_length])
-        }
-
-        interactive_model = InteractiveModel(
-        batch_size=batch_size,
-        task_feature_lengths=task_feature_lengths,
-        output_dir=output_dir,
-        partitioner=partitioner,
-        model=model,
-        dtype=dtype,
-        restore_mode=restore_mode,
-        checkpoint_path=checkpoint_path,
-        input_shapes=input_shapes,
-        from_scratch = True
-        )
-        
-        for i in range(2): 
-            # print("input:",examples[0]['input'])
-            # print("target_length:",target_length)
-            examples_and_predictions, _, infer_time = block_until_ready(interactive_model.predict_with_aux(examples=examples))
-            predictions = [prediction for example, prediction in examples_and_predictions]
-            print(f"Inference batch {i} complete, use time: {infer_time}")
-            output_len = len(predictions[0].decode().split(" "))
-            print ("output len: ",output_len)
-            # res.append({"inlen":input_length,"outlen":output_len,"time":time.time()-last_t})
+        _, initial_variables = t5_module.apply(
+                {'params': variables['params']},
+                encoder_input_tokens=fake_encoder_inputs,
+                decoder_input_tokens=fake_decoder_inputs,
+                decoder_target_tokens=fake_decoder_inputs,
+                mutable=['cache'],
+                decode=True,
+                enable_dropout=False,
+                decode_positional_encoding_index=0
+            )
+        cache = initial_variables['cache']
+        # print(cache)
+        # breakpoint()
+        print("initialized.")
+        # print(variables.keys())
+        variables['cache']=cache
+        flat_ids= jnp.ones((1,1))
+        encode_jit = jax.jit(functools.partial(
+                t5_module.apply,
+                method=network.Transformer.encode
+                    ))
+        decode_jit = jax.jit(functools.partial(
+                t5_module.apply,
+                method=network.Transformer.decode,
+                decode = True,
+                mutable=['cache']
+                    ))
+        for repeat in range(4):
+            stime = time.time()
+            # print(variables)
+            encoded = block_until_ready(encode_jit(variables,fake_encoder_inputs))
+            res = block_until_ready(decode_jit(variables,encoded,fake_encoder_inputs,flat_ids,flat_ids))
+            infer_time = time.time()-stime
             with open("res.json","a")as f:
-                f.write("\n")
-                f.write(json.dumps({"model":modelname,"inlen":input_length,"outlen":output_len,"time":infer_time},ensure_ascii =False))
-            last_t = time.time()
-end_t = time.time()
-print("mark:end!")
-# predictions = [prediction for example, prediction in examples_and_predictions]
-# print(f"Predictions: {predictions}\n")
-print("Inference time:",end_t-start_t)
-# with open("res.json","a")as f:
-#     f.write(json.dumps(res,ensure_ascii =False))
+                    f.write("\n")
+                    f.write(json.dumps({"model":modelname,"inlen":l,"outlen":decoder_len,"time":infer_time},ensure_ascii =False))
+        
+        
+#         task_feature_lengths = {'inputs': input_length, 'targets': target_length}
+#         output_dir='/tmp/output_dir'
+#         input_shapes = {
+#             'encoder_input_tokens': np.array([batch_size, input_length]),
+#             'decoder_target_tokens': np.array([batch_size, target_length]),
+#             'decoder_input_tokens': np.array([batch_size, target_length]),
+#             'decoder_loss_weights': np.array([batch_size, target_length])
+#         }
+
+#         interactive_model = InteractiveModel(
+#         batch_size=batch_size,
+#         task_feature_lengths=task_feature_lengths,
+#         output_dir=output_dir,
+#         partitioner=partitioner,
+#         model=model,
+#         dtype=dtype,
+#         restore_mode=restore_mode,
+#         checkpoint_path=checkpoint_path,
+#         input_shapes=input_shapes,
+#         # from_scratch = True
+#         )
+        
+#         for i in range(1): 
+#             # print("input:",examples[0]['input'])
+#             # print("target_length:",target_length)
+#             examples_and_predictions, _, infer_time = block_until_ready(interactive_model.predict_with_aux(examples=examples))
+#             # interactive_model.train_step(examples=examples)
+#             predictions = [prediction for example, prediction in examples_and_predictions]
+#             # print(f"Inference batch {i} complete, use time: {infer_time}")
+#             output_len = len(predictions[0].decode().split(" "))
+#             # print ("output len: ",output_len)
+#             # res.append({"inlen":input_length,"outlen":output_len,"time":time.time()-last_t})
+#             with open("res.json","a")as f:
+#                 f.write("\n")
+#                 f.write(json.dumps({"model":modelname,"inlen":input_length,"outlen":output_len,"time":infer_time},ensure_ascii =False))
+#             # last_t = time.time()
+# # end_t = time.time()
+# print("mark:end!")
+# # predictions = [prediction for example, prediction in examples_and_predictions]
+# # print(f"Predictions: {predictions}\n")
+# # print("Inference time:",end_t-start_t)
+

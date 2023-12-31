@@ -320,20 +320,20 @@ class MultiHeadDotProductAttention(nn.Module):
     
     
     assert self.attn_type in ["self-attn","cross-attn","self-attn-causal"], f"invalid attn_type: {self.attn_type }"
-    if self.kernel_method:
-        mask = mask[:,:,:,0:1]
-        kvmask = jnp.einsum("bhld->blhd",mask)
-        value = value * kvmask
-        mask=None
+    # if self.kernel_method:
+    #     mask = mask[:,:,:,0:1]
+    #     kvmask = jnp.einsum("bhld->blhd",mask)
+    #     value = value * kvmask
+        # mask=None
       
-    if self.linformer:
+    if self.linformer or self.kernel_method:
       if self.attn_type == "self-attn":
         #mask : (batch, 1, length, length)
         mask = mask[:,:,:,0:1] #(batch,1,length,1)
         kvmask = jnp.einsum("bhld->blhd",mask) # (batch,length,1,1)
         key = key * kvmask
         value = value * kvmask
-        mask=None
+        # mask=None
       elif self.attn_type == "cross-attn":
         kvmask = jnp.einsum("bhld->blhd",kvmask[:,:,:,0:1])
         key = key * kvmask
@@ -341,7 +341,7 @@ class MultiHeadDotProductAttention(nn.Module):
         if qmask is not None:
           qmask = jnp.einsum("bhld->blhd",qmask[:,:,:,0:1])
           query = query * qmask
-        mask=None
+        # mask=None
       elif self.attn_type == "self-attn-causal":
         if qmask is not None:
           qmask = jnp.einsum("bhld->blhd",qmask[:,:,:,0:1])
@@ -354,6 +354,8 @@ class MultiHeadDotProductAttention(nn.Module):
           mask = causal_mask
           # mask = None
         
+    mask = None if self.kernel_method or self.linformer else mask
+    
     # Convert the boolean attention mask to an attention bias.
     if mask is not None:
       # attention mask in the form of attention bias
@@ -617,14 +619,14 @@ class Embed(nn.Module):
 
 def absolute_positional_embedding(x,start_position,d_model,max_len=5000,dtype=jnp.float16):
     # Create matrix of [SeqLen, HiddenDim] representing the positional encoding for max_len inputs
-    pe = jnp.zeros((max_len, d_model))
+    pe = jnp.zeros((max_len, d_model),dtype=dtype)
     position = jnp.arange(0, max_len, dtype=dtype)[:,None]
-    div_term = jnp.exp(jnp.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
-    pe.at[:, 0::2].set(jnp.sin(position * div_term))
-    pe.at[:, 1::2].set(jnp.cos(position * div_term))
+    div_term = jnp.exp(jnp.arange(0, d_model, 2,dtype=dtype) * (-math.log(10000.0) / d_model))
+    pe = pe.at[:, 0::2].set(jnp.sin(position * div_term))
+    pe = pe.at[:, 1::2].set(jnp.cos(position * div_term))
     pe = jnp.array(pe[None])
     pe = jax.device_put(pe)
-    x = x + pe[:,start_position:start_position+x.shape[1]]
+    x = x + lax.dynamic_slice_in_dim(pe, start_position, x.shape[1],axis=1)
     return x
       
 class RelativePositionBiases(nn.Module):

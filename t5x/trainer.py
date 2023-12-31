@@ -44,6 +44,9 @@ from t5x import partitioning
 from t5x import train_state as train_state_lib
 from t5x import utils
 import typing_extensions
+from jax.config import config
+# config.update('jax_disable_jit', True)
+
 
 
 Array = Union[np.ndarray, jnp.ndarray]

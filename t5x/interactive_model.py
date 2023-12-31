@@ -515,6 +515,7 @@ class InteractiveModel(abc.ABC):
         task_feature_lengths=self._task_feature_lengths,
         features=self._features,
     )
+    breakpoint()
     model_dataset = self._feature_converter(
         dataset, task_feature_lengths=self._task_feature_lengths
     )
@@ -534,6 +535,7 @@ class InteractiveModel(abc.ABC):
     # Main Loop over "batches".
     all_inferences = []
     all_aux_values = {}
+    infer_time = 0
     for chunk, chunk_batch in infer_dataset_iter:
       # Load the dataset for the next chunk. We can't use `infer_dataset_iter`
       # directly since `infer_fn` needs to know the exact size of each chunk,
@@ -554,7 +556,7 @@ class InteractiveModel(abc.ABC):
       
       stime = time.time()
       inferences = block_until_ready(infer_fn(model_dataset.enumerate(), rng=chunk_rng))
-      infer_time = time.time()-stime
+      infer_time += time.time()-stime
       
       inferences = _extract_tokens_and_aux_values(inferences)
 
@@ -578,7 +580,7 @@ class InteractiveModel(abc.ABC):
         for key, values in aux_values.items():
           all_aux_values[key] += values
 
-    return all_inferences, all_aux_values,infer_time
+    return all_inferences, all_aux_values, infer_time
 
   def predict_with_aux(
       self, examples: Sequence[Union[str, dict[str, str]]]

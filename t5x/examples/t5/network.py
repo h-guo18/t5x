@@ -175,7 +175,7 @@ class DecoderLayer(nn.Module):
         float32_logits=cfg.float32_attention_logits,
         name='encoder_decoder_attention',
         attn_type="cross-attn",
-        linformer=False,
+        linformer=(cfg.linformer and layer_idx>0),
         linformer_dim = cfg.linformer_dim,
         # kernel_method = cfg.kernel_method
         )(
@@ -261,7 +261,8 @@ class Decoder(nn.Module):
                qmask=None,
                deterministic=False,
                decode=False,
-               max_decode_length=None):
+               max_decode_length=None,
+               decode_positional_encoding_index:int =-1):
     cfg = self.config
     assert decoder_input_tokens.ndim == 2  # [batch, len]
     rel_emb = layers.RelativePositionBiases(
@@ -278,7 +279,11 @@ class Decoder(nn.Module):
     
     if cfg.absolute_positional_embedding:
         #apply absolute positional encoding at the input of decoder
-        y = layers.absolute_positional_embedding(y,start_position=0,d_model=cfg.emb_dim,dtype=cfg.dtype)
+        # if decode:
+            # breakpoint()
+        #during decoding, we input on token at a time, so add positional encoding starting from the current index
+        ape_start = decode_positional_encoding_index if decode else 0 
+        y = layers.absolute_positional_embedding(y,start_position=ape_start,d_model=cfg.emb_dim,dtype=cfg.dtype)
         
     y = nn.Dropout(
         rate=cfg.dropout_rate, broadcast_dims=(-2,))(
@@ -378,7 +383,9 @@ class Transformer(nn.Module):
       decoder_positions=None,
       enable_dropout=True,
       decode=False,
-      max_decode_length=None):
+      max_decode_length=None,
+      decode_positional_encoding_index:int = -1
+      ):
     """Applies Transformer decoder-branch on encoded-input and target."""
     cfg = self.config
 
@@ -435,7 +442,8 @@ class Transformer(nn.Module):
         qmask=qmask,
         deterministic=not enable_dropout,
         decode=decode,
-        max_decode_length=max_decode_length)
+        max_decode_length=max_decode_length,
+        decode_positional_encoding_index = decode_positional_encoding_index)
     return logits
 
   def __call__(self,
@@ -448,7 +456,8 @@ class Transformer(nn.Module):
                decoder_positions=None,
                *,
                enable_dropout: bool = True,
-               decode: bool = False):
+               decode: bool = False,
+               decode_positional_encoding_index:int=-1):
     """Applies Transformer model on the inputs.
 
     This method requires both decoder_target_tokens and decoder_input_tokens,
@@ -484,4 +493,5 @@ class Transformer(nn.Module):
         decoder_segment_ids=decoder_segment_ids,
         decoder_positions=decoder_positions,
         enable_dropout=enable_dropout,
-        decode=decode)
+        decode=decode,
+        decode_positional_encoding_index=decode_positional_encoding_index)
