@@ -1111,9 +1111,7 @@ class FastAttention(metaclass=abc.ABCMeta):
       Output of shape [bs, dim1, dim2, ..., dimN,, num_heads, value_channels].
     """
     raise NotImplementedError('Abstract method')
-
-
-def _numerator(z_slice_shape, precision, unroll=1):
+def _numerator(z_slice_shape, precision,dtype, unroll=1):
   """Computes the numartor."""
 
   def fwd(qs, ks, vs):
@@ -1124,9 +1122,10 @@ def _numerator(z_slice_shape, precision, unroll=1):
       x_slice = jnp.einsum('...m,...md->...d', q, p, precision=precision)
       return p, x_slice
 
-    init_value = jnp.zeros(z_slice_shape)
+    init_value = jnp.zeros(z_slice_shape,dtype=dtype)
     p, w = lax.scan(body, init_value, (qs, ks, vs), unroll=unroll)
     return w, (p, qs, ks, vs)
+    # return w
 
   def bwd(pqkv, w_ct):
 
@@ -1155,6 +1154,52 @@ def _numerator(z_slice_shape, precision, unroll=1):
   _numerator_impl.defvjp(fwd, bwd)
 
   return _numerator_impl
+  # return fwd
+
+# def _numerator(z_slice_shape, precision,dtype, unroll=1):
+#   """Computes the numartor."""
+
+#   def fwd(qs, ks, vs):
+
+#     def body(p, qkv):
+#       (q, k, v) = qkv
+#       p += jnp.einsum('...m,...d->...md', k, v, precision=precision)
+#       x_slice = jnp.einsum('...m,...md->...d', q, p, precision=precision)
+#       return p, x_slice
+
+#     init_value = jnp.zeros(z_slice_shape,dtype=dtype)
+#     p, w = lax.scan(body, init_value, (qs, ks, vs), unroll=unroll)
+#     # return w, (p, qs, ks, vs)
+#     return w
+
+#   def bwd(pqkv, w_ct):
+
+#     def body(carry, qkv_xct):
+#       p, p_ct = carry
+#       q, k, v, x_ct = qkv_xct
+#       q_ct = jnp.einsum('...d,...md->...m', x_ct, p, precision=precision)
+#       p_ct += jnp.einsum('...d,...m->...md', x_ct, q, precision=precision)
+#       k_ct = jnp.einsum('...md,...d->...m', p_ct, v, precision=precision)
+#       v_ct = jnp.einsum('...md,...m->...d', p_ct, k, precision=precision)
+#       p -= jnp.einsum('...m,...d->...md', k, v, precision=precision)
+#       return (p, p_ct), (q_ct, k_ct, v_ct)
+
+#     p, qs, ks, vs = pqkv
+#     _, (qs_ct, ks_ct, vs_ct) = lax.scan(
+#         body, (p, jnp.zeros_like(p)), (qs, ks, vs, w_ct),
+#         reverse=True,
+#         unroll=unroll)
+#     return qs_ct, ks_ct, vs_ct
+
+#   # @jax.custom_vjp
+#   # def _numerator_impl(qs, ks, vs):
+#   #   w, _ = fwd(qs, ks, vs)
+#   #   return w
+
+#   # _numerator_impl.defvjp(fwd, bwd)
+
+#   # return _numerator_impl
+#   return fwd
 
 
 def _denominator(t_slice_shape, precision, unroll=1):
@@ -1299,7 +1344,7 @@ class FastAttentionviaLowRankDecomposition(FastAttention):
       z_slice_shape = key_prime.shape[0:len(batch_dims_t)] + (
           key_prime.shape[-1],) + (value.shape[-1],)
 
-      numerator_fn = _numerator(z_slice_shape, precision, self.lax_scan_unroll)
+      numerator_fn = _numerator(z_slice_shape, precision, dtype, self.lax_scan_unroll)
       w = numerator_fn(
           jnp.moveaxis(query_prime, index, 0),
           jnp.moveaxis(key_prime, index, 0), jnp.moveaxis(value, index, 0))

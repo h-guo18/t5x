@@ -45,7 +45,7 @@ class T5Config:
   float32_attention_logits: bool = False
   linformer : bool = False
   linformer_dim:int = 128 #projection dim of linformer
-  kernel_method:bool = False # whether or not use kernel method
+  kernel_method:str = None # whether or not use kernel method
   absolute_positional_embedding:bool = False # if False, use relative postional encoding
 
 class EncoderLayer(nn.Module):
@@ -148,7 +148,7 @@ class DecoderLayer(nn.Module):
         name='self_attention',
         attn_type = "self-attn-causal",
         linformer=False,
-        # kernel_method = cfg.kernel_method
+        kernel_method = cfg.kernel_method
         )(
             x,
             x,
@@ -175,9 +175,9 @@ class DecoderLayer(nn.Module):
         float32_logits=cfg.float32_attention_logits,
         name='encoder_decoder_attention',
         attn_type="cross-attn",
-        linformer=(cfg.linformer and layer_idx>0),
+        linformer=False,
         linformer_dim = cfg.linformer_dim,
-        # kernel_method = cfg.kernel_method
+        kernel_method = cfg.kernel_method
         )(
             y, encoded, encoder_decoder_mask, kvmask=kvmask,qmask=qmask,E_key=layer_idx+10,F_key=layer_idx+100,deterministic=deterministic)
     y = nn.Dropout(

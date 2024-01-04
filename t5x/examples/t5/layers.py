@@ -170,7 +170,7 @@ class MultiHeadDotProductAttention(nn.Module):
       1.0, 'fan_in', 'normal')
   float32_logits: bool = False  # computes logits in float32 for stability.
   linformer:bool = False
-  kernel_method:bool = False
+  kernel_method:str = None
   linformer_dim:int = 128
 
   @nn.compact
@@ -386,13 +386,19 @@ class MultiHeadDotProductAttention(nn.Module):
       value = jnp.einsum("blhd,lk->bkhd",value,linformer_E)
       # key = jnp.einsum("blhd,hlk->bkhd",key,linformer_E)
       # value = jnp.einsum("blhd,hlk->bkhd",value,linformer_E)
-
-    if self.kernel_method:
+    if self.kernel_method == 'performer':
       attn_fn = make_fast_generalized_attention(qkv_dim=self.head_dim,
-                                               
-                                            unidirectional=(self.attn_type == 'self-attn-causal'),
+                                                renormalize_attention=False,
+                                            unidirectional=(self.attn_type == 'self-attn-causal') and (not decode),
                                             lax_scan_unroll = 64
                                             )
+    elif self.kernel_method == 'rnn':
+      attn_fn = make_fast_generalized_attention(qkv_dim=self.head_dim,
+                                              renormalize_attention=False,
+                                          unidirectional=(self.attn_type == 'self-attn-causal') and not (decode),
+                                          lax_scan_unroll = 64,
+                                          kernel_fn = (lambda x: (jax.nn.elu(x) + 1) )
+                                          )
     else:
       attn_fn = dot_product_attention
     x = attn_fn(
