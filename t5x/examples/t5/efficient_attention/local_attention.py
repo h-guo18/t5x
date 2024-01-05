@@ -2,11 +2,16 @@ import math
 from typing import Optional, Tuple, Dict
 from einops import rearrange
 
-import torch
-from torch import nn
+# import torch
+# from torch import nn
 import numpy as np
-import torch.nn.functional as F
-from torch import Tensor
+from jax import numpy as jnp
+from flax import linen as nn
+# import torch.nn.functional as F
+# from torch import Tensor
+
+Array = jnp.ndarray
+
 from timm.models.layers import trunc_normal_
 from efficient_attention import MultiheadAttention, add_nested_argument
 from efficient_attention.attn_utils import (
@@ -44,16 +49,16 @@ class LocalAttention(MultiheadAttention):
                 # handle the boarder conditions...
                 w_pad = self.ext_size
                 self.local_relative_position_bias_table = nn.Parameter(
-                    torch.zeros(2 * (window_size + w_pad - 1) * (2 * w_pad + window_size + 1) + 1, self.num_heads))
+                    jnp.zeros(2 * (window_size + w_pad - 1) * (2 * w_pad + window_size + 1) + 1, self.num_heads))
                 trunc_normal_(self.local_relative_position_bias_table, std=.02)
 
                 # get pair-wise relative position index
-                coords_h = torch.arange(-w_pad, w_pad + window_size)
-                coords_w = torch.arange(-w_pad, w_pad + window_size)
-                coords = torch.stack(torch.meshgrid([coords_h, coords_w], indexing='ij'))  # 2, 2w, 2w
+                coords_h = jnp.arange(-w_pad, w_pad + window_size)
+                coords_w = jnp.arange(-w_pad, w_pad + window_size)
+                coords = jnp.stack(jnp.meshgrid([coords_h, coords_w], indexing='ij'))  # 2, 2w, 2w
                 coords = coords.view(2, (window_size + w_pad * 2)**2).transpose(0, 1).unsqueeze(0) # 1, 4w**2, 2
-                q_coords_hw = torch.arange(0, window_size)
-                q_coords = torch.stack(torch.meshgrid([q_coords_hw, q_coords_hw])) # 2, w, w
+                q_coords_hw = jnp.arange(0, window_size)
+                q_coords = jnp.stack(jnp.meshgrid([q_coords_hw, q_coords_hw])) # 2, w, w
                 q_coords = q_coords.view(2, window_size**2).transpose(0, 1).unsqueeze(1) # w**2, 1, 2
                 relative_coords = q_coords - coords
                 relative_coords += w_pad + window_size - 1  # shift to start from 0
@@ -62,7 +67,7 @@ class LocalAttention(MultiheadAttention):
                 self.register_buffer("relative_position_index", relative_position_index)
             else:
                 self.local_relative_position_bias_table = nn.Parameter(
-                    torch.zeros(self.num_heads, window_size, window_size + self.ext_size * 2))
+                    jnp.zeros(self.num_heads, window_size, window_size + self.ext_size * 2))
                 trunc_normal_(self.local_relative_position_bias_table, std=.02)
         self.apply(self._init_weights)
 
@@ -133,10 +138,10 @@ class LocalAttention(MultiheadAttention):
 
     def _apply_attention(
         self,
-        q: Tensor,
-        k: Tensor,
-        v: Tensor,
-        key_padding_mask: Optional[Tensor] = None,
+        q: Array,
+        k: Array,
+        v: Array,
+        key_padding_mask: Optional[Array] = None,
     ):
         mask_val = -5e4
         if self.attn_2d:
@@ -156,13 +161,13 @@ class LocalAttention(MultiheadAttention):
             b, h, n, d = q.shape
             shape = n
         if key_padding_mask is None:
-            key_padding_mask = torch.zeros(b, n, dtype=q.dtype, device=q.device)
-        key_padding_mask = key_padding_mask.unsqueeze(1).unsqueeze(-1).to(torch.bool) # [b, 1, n, 1]
+            key_padding_mask = jnp.zeros(b, n, dtype=q.dtype, device=q.device)
+        key_padding_mask = key_padding_mask.unsqueeze(1).unsqueeze(-1).to(jnp.bool_) # [b, 1, n, 1]
 
         w_q = self.window_partition(q, shape, ext_window_size=0)
         w_k = self.window_partition(k, shape, ext_window_size=self.ext_size)
         w_v = self.window_partition(v, shape, ext_window_size=self.ext_size)
-        local_dots = torch.einsum('bhwie,bhwje->bhwij', w_q, w_k) * self.scale # [b, h, w, i, j]
+        local_dots = jnp.einsum('bhwie,bhwje->bhwij', w_q, w_k) * self.scale # [b, h, w, i, j]
 
         if self.use_rpe:
             local_dots = self.add_rel_pos_bias(local_dots)
@@ -172,11 +177,11 @@ class LocalAttention(MultiheadAttention):
             shape, 
             ext_window_size=self.ext_size,
             pad_val=1
-            ).to(torch.bool).transpose(-1, -2)
+            ).to(jnp.bool_).transpose(-1, -2)
         local_dots.masked_fill_(local_dots_mask, mask_val)
 
         local_attn = local_dots.softmax(dim=-1)
-        output = torch.einsum('bhwij,bhwje->bhwie', local_attn, w_v)
+        output = jnp.einsum('bhwij,bhwje->bhwie', local_attn, w_v)
 
         output = self.window_merge(output, shape)[..., :orig_n, :]
         return output

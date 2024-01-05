@@ -12,26 +12,45 @@ def _fp32_softmax(x, dim):
     return y
 
 # adapted from https://github.com/lucidrains/local-attention/blob/master/local_attention/local_attention.py
-def pad_to_multiple(tensor, multiple, dim=-2, value=0, create_mask=False):
-    assert dim < 0 # only accept ``dim'' index in a reverse manner
+# def pad_to_multiple(tensor, multiple, dim=-2, value=0, create_mask=False):
+#     assert dim < 0 # only accept ``dim'' index in a reverse manner
+#     seqlen = int(tensor.shape[dim])
+#     m = seqlen / multiple
+#     if m.is_integer():
+#         if create_mask:
+#             return tensor, jnp.zeros(size=(tensor.shape[0], tensor.shape[-2]), dtype=jnp.bool, device=tensor.device)
+#         else:
+#             return tensor
+#     remainder = math.ceil(m) * multiple - seqlen
+#     pad_offset = (0,) * (-1 - dim) * 2
+#     padded_res = jnp.pad(tensor, (*pad_offset, 0, remainder), value=value)
+#     if create_mask:
+#         # assume dim 0 is the batch size
+#         padding_mask = jnp.zeros(size=(padded_res.shape[0], padded_res.shape[-2]), dtype=jnp.bool, device=padded_res.device)
+#         padding_mask[:, -remainder:] = True
+#         return padded_res, padding_mask
+#     else:
+#         return padded_res
+def pad_to_multiple(tensor, multiple, dim=1, value=0, create_mask=False):
+    # assert dim < 0 # only accept ``dim'' index in a reverse manner
+    # tensor:(b,l,h,d)
     seqlen = int(tensor.shape[dim])
     m = seqlen / multiple
     if m.is_integer():
         if create_mask:
-            return tensor, jnp.zeros(size=(tensor.shape[0], tensor.shape[-2]), dtype=jnp.bool, device=tensor.device)
+            #mask:(b,l)
+            return tensor, jnp.zeros(shape=(tensor.shape[0], tensor.shape[1]), dtype=jnp.bool)
         else:
             return tensor
     remainder = math.ceil(m) * multiple - seqlen
-    pad_offset = (0,) * (-1 - dim) * 2
-    padded_res = jnp.pad(tensor, (*pad_offset, 0, remainder), value=value)
+    padded_res = jnp.pad(tensor, (0,0, 0,remainder, 0,0 ,0,0), value=value)
     if create_mask:
         # assume dim 0 is the batch size
-        padding_mask = jnp.zeros(size=(padded_res.shape[0], padded_res.shape[-2]), dtype=jnp.bool, device=padded_res.device)
+        padding_mask = jnp.zeros(shape=(padded_res.shape[0], padded_res.shape[1]), dtype=jnp.bool)
         padding_mask[:, -remainder:] = True
         return padded_res, padding_mask
     else:
         return padded_res
-
 
 def look_around(x, backward = 1, forward = 0, pad_value = -1, dim = -2):
     dims = (-dim) * (0, 0)
@@ -158,15 +177,16 @@ def nonoverlap_window_1d_partition(x, window_size):
 def window_1d_partition(x, window_size, ext_window_size=0, pad_val=0):
     b, h, n, d = x.shape
     n_groups = n // window_size
-    if ext_window_size > 0:
-        ext_len = ext_window_size
-        x = jnp.pad(x, (0, 0, ext_len, ext_len), value=pad_val)
-        out_shape = (b, h, n_groups, 2 * ext_len + window_size, d)
-        strides = x.stride()
-        out_stride = (strides[0], strides[1], window_size * strides[2], strides[2], strides[3])
-        return torch.as_strided(x, size=out_shape, stride=out_stride)
-    else:
-        return nonoverlap_window_1d_partition(x, window_size)
+    assert ext_window_size== 0
+    # if ext_window_size > 0:
+    #     ext_len = ext_window_size
+    #     x = jnp.pad(x, (0, 0, ext_len, ext_len), value=pad_val)
+    #     out_shape = (b, h, n_groups, 2 * ext_len + window_size, d)
+    #     strides = x.stride()
+    #     out_stride = (strides[0], strides[1], window_size * strides[2], strides[2], strides[3])
+    #     return torch.as_strided(x, size=out_shape, stride=out_stride)
+    # else:
+    return nonoverlap_window_1d_partition(x, window_size)
 
 def window_1d_merge(x):
     return rearrange(x, '... g w d ->... (g w) d')

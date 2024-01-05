@@ -29,6 +29,7 @@ from jax import random
 import jax.numpy as jnp
 import numpy as np
 from .fast_attention import make_fast_generalized_attention
+from .efficient_attention import EVA
 printfile = open('print.txt', 'w')
 from jax.config import config
 # config.update('jax_disable_jit', True)
@@ -399,8 +400,11 @@ class MultiHeadDotProductAttention(nn.Module):
                                           lax_scan_unroll = 64,
                                           kernel_fn = (lambda x: (jax.nn.elu(x) + 1) )
                                           )
+    elif self.kernel_method=='eva':
+      attn_fn = EVA().forward
     else:
       attn_fn = dot_product_attention
+      
     x = attn_fn(
         query,
         key,

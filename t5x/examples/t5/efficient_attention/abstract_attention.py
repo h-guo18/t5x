@@ -1,11 +1,14 @@
 import math
 from typing import Optional, Tuple, Dict
-import torch
-import torch.nn as nn
+# import torch
+# import torch.nn as nn
 from timm.models.layers import trunc_normal_
-from torch import Tensor
+# from torch import Tensor
+from jax import numpy as jnp
+from flax import linen as nn
 import numpy as np
 from efficient_attention import add_nested_argument
+Array = jnp.ndarray
 
 class AbstractAttention(nn.Module):
 
@@ -18,18 +21,18 @@ class AbstractAttention(nn.Module):
 
     def forward(
         self,
-        query: Tensor,
-        key: Tensor,
-        value: Tensor,
-        query_padding_mask: Optional[Tensor] = None,
-        key_padding_mask: Optional[Tensor] = None,
+        query: Array,
+        key: Array,
+        value: Array,
+        query_padding_mask: Optional[Array] = None,
+        key_padding_mask: Optional[Array] = None,
         need_weights: bool = True,
         need_head_weights: bool = False,
-        attn_mask: Optional[Tensor] = None,
+        attn_mask: Optional[Array] = None,
         static_kv: bool = False,
-        incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None,
+        incremental_state: Optional[Dict[str, Dict[str, Optional[Array]]]] = None,
         **kwargs
-    ) -> Tensor:
+    ) -> Array:
         # this member usually proceeds as follows:
         # 
         raise NotImplementedError
@@ -90,11 +93,11 @@ class MultiheadAttention(nn.Module):
     
     def _apply_attention(
         self,
-        q: Tensor,
-        k: Tensor,
-        v: Tensor,
-        key_padding_mask: Optional[Tensor] = None,
-        attn_mask: Optional[Tensor] = None,
+        q: Array,
+        k: Array,
+        v: Array,
+        key_padding_mask: Optional[Array] = None,
+        attn_mask: Optional[Array] = None,
     ):
         r"""
         Computes scaled dot product attention on query, key and value tensors, using
@@ -124,7 +127,7 @@ class MultiheadAttention(nn.Module):
         if key_padding_mask is not None:
             # don't attend to padding symbols
             attn = attn.masked_fill(
-                key_padding_mask.unsqueeze(1).unsqueeze(2).to(torch.bool),
+                key_padding_mask.unsqueeze(1).unsqueeze(2).to(jnp.bool_),
                 float("-inf"),
             )
         attn = attn.softmax(dim=-1)

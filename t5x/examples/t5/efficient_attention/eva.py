@@ -9,6 +9,7 @@ from einops import rearrange
 from flax import linen as nn
 import jax.numpy as jnp
 import jax
+from jax import lax
 
 
 # adapted from 
@@ -119,62 +120,71 @@ class EVA(LocalAttention):
 
     def _process_input(self, x, key_padding_mask):
         # this function re-implements the parent method.
-        B, *seq_shape, C = x.shape
-        N = jnp.prod(seq_shape)
-        if self.attn_2d:
-            assert len(seq_shape) == 2
-            if self.window_size > 0:
-                assert seq_shape[0] % self.window_size == 0 and seq_shape[1] % self.window_size == 0
-        else:
-            if self.window_size > 0:
-                if key_padding_mask is None:
-                    x, key_padding_mask = pad_to_multiple(x, self.window_size, dim=-2, create_mask=True)
-                else:
-                    x = pad_to_multiple(x, self.window_size, dim=-2)
-                    key_padding_mask = pad_to_multiple(key_padding_mask, self.window_size, dim=-1, value=True)
-                N = x.shape[-2]
-                seq_shape = [N]
+        B, seq_shape,h, C = x.shape
+        if self.window_size > 0:
+            if key_padding_mask is None:
+                x, key_padding_mask = pad_to_multiple(x, self.window_size, dim=1, create_mask=True)
+            else:
+                x = pad_to_multiple(x, self.window_size, dim=1)
+                key_padding_mask = pad_to_multiple(key_padding_mask, self.window_size, dim=1, value=True)
         return x, key_padding_mask, seq_shape
 
-    def forward(self, x, key_padding_mask = None):
+    def forward(self, q,k,v,**kwargs):
         mask_val = -5e4
         ######################## Generate Proposal Parameters ###############################
-        B, *seq_shape, C = x.shape
-        orig_n = jnp.prod(seq_shape)
-        x, key_padding_mask, seq_shape = self._process_input(x, key_padding_mask)
-        N = jnp.prod(seq_shape)
-        q, k, v = self.proj_and_split_heads(x)
+        B, q_orig_n,h, C =q.shape
+        B, kv_origin_n,h, C =k.shape
+        
+        q, q_key_padding_mask, q_len = self._process_input(q, key_padding_mask=None)
+        k, kv_key_padding_mask, kv_len = self._process_input(k, key_padding_mask=None)
+        v, _, _ = self._process_input(v, key_padding_mask=None)
+        #(b,l,h,d)
+        
+        # N = seq_shape
+        # q, k, v = self.proj_and_split_heads(x)
+        #qkv: (b,h,l,d)
+        q = jnp.einsum('blhd->bhld',q)
+        k = jnp.einsum('blhd->bhld',k)
+        v = jnp.einsum('blhd->bhld',v)
+        
 
-        if key_padding_mask is None:
-            key_padding_mask = jnp.zeros(B, N, dtype=k.dtype, device=k.device)
-        key_padding_mask = key_padding_mask.unsqueeze(1).unsqueeze(-1).to(jnp.bool) # [b, 1, n, 1]
+        # key_padding_mask = jnp.zeros(B, N, dtype=k.dtype, device=k.device)
+        q_key_padding_mask = q_key_padding_mask.expand_dims(1).expand_dims(-1).astype(jnp.bool) # [b, 1, n, 1]
+        kv_key_padding_mask = kv_key_padding_mask.expand_dims(1).expand_dims(-1).astype(jnp.bool) # [b, 1, n, 1]
+        
        
-        w_q = self.window_partition(q, seq_shape, ext_window_size=0)
-        w_k = self.window_partition(k, seq_shape, ext_window_size=self.ext_size)
-        w_v = self.window_partition(v, seq_shape, ext_window_size=self.ext_size) # [b, h, w, j, d]
+        w_q = self.window_partition(q, q_len, ext_window_size=0)
+        w_k = self.window_partition(k, kv_len, ext_window_size=self.ext_size)
+        w_v = self.window_partition(v, kv_len, ext_window_size=self.ext_size) # [b, h, w, j, d]
 
-        if self.attn_2d:
-            rf_win_size = int(math.sqrt(N // self.num_landmarks))
-        else:
-            rf_win_size = int(N // self.num_landmarks)
+
+        q_rf_win_size = int(q_len // self.num_landmarks)
+        kv_rf_win_size = int(kv_len // self.num_landmarks)
         # [b, h, c, j, d]
-        rf_w_q = self.window_partition(q, seq_shape, window_size=rf_win_size, ext_window_size=self.ext_size)
+        rf_w_q = self.window_partition(q, q_len, window_size=q_rf_win_size, ext_window_size=self.ext_size)
         # [b, h, c, j, d]
-        rf_w_k = self.window_partition(k, seq_shape, window_size=rf_win_size, ext_window_size=self.ext_size)
+        rf_w_k = self.window_partition(k, kv_len, window_size=kv_rf_win_size, ext_window_size=self.ext_size)
         # [b, h, c, j, d]
-        rf_w_v = self.window_partition(v, seq_shape, window_size=rf_win_size, ext_window_size=self.ext_size)
+        rf_w_v = self.window_partition(v, kv_len, window_size=kv_rf_win_size, ext_window_size=self.ext_size)
         # compute local attention
         # [b, 1, c, j, 1]
-        rf_w_mask = self.window_partition(
-            key_padding_mask, 
-            seq_shape, 
-            window_size=rf_win_size,
+        q_rf_w_mask = self.window_partition(
+            q_key_padding_mask, 
+            q_len, 
+            window_size=q_rf_win_size,
             ext_window_size=self.ext_size,
             pad_val=1
             ).to(jnp.bool)
-        rf_w_q = rf_w_q.masked_fill(rf_w_mask, 0.)
-        rf_w_k = rf_w_k.masked_fill(rf_w_mask, 0.)
-        rf_w_v = rf_w_v.masked_fill(rf_w_mask, 0.)
+        kv_rf_w_mask = self.window_partition(
+            kv_key_padding_mask, 
+            kv_len, 
+            window_size=kv_rf_win_size,
+            ext_window_size=self.ext_size,
+            pad_val=1
+            ).to(jnp.bool)
+        rf_w_q = rf_w_q.masked_fill(q_rf_w_mask, 0.)
+        rf_w_k = rf_w_k.masked_fill(kv_rf_w_mask, 0.)
+        rf_w_v = rf_w_v.masked_fill(kv_rf_w_mask, 0.)
 
         if self.adaptive_proj in ['default', 'no-ln']:
             rf_q_bar = self.adaptive_mu_q(rf_w_q.mean(dim=-2))
@@ -186,12 +196,13 @@ class EVA(LocalAttention):
             mu = jnp.zeros_like(rf_k_bar)
         ######################## Sampling from proposal ###############################
         if self.training:
-            weights = mu + jnp.randn_like(mu)
+            seed = lax.convert_element_type(jnp.ceil(jnp.sum(q) * 10000000.0), jnp.int32)
+            weights = mu + jax.random.normal(key=jax.random.PRNGKey(seed),shape=mu.shape,dtype=k.dtype)
         else:
             weights = mu    
         # [b, h, c, j, d], [b, h, c, 1, d] -> [b, h, c, j]
-        log_proj_w_k = prm_projection(rf_w_k, weights.unsqueeze(-2), normalize=False).squeeze(-2)
-        log_proj_w_k = log_proj_w_k.masked_fill(rf_w_mask.squeeze(-1), mask_val)
+        log_proj_w_k = prm_projection(rf_w_k, jax.expand_dims(weights,-2), normalize=False).squeeze(-2)
+        log_proj_w_k = log_proj_w_k.masked_fill(kv_rf_w_mask.squeeze(-1), mask_val)
 
         # [b, h, c, j] [b, h, c, j, d] -> [b, h, c, d]
         beta = jnp.einsum('...cj,...cjd->...cd', jax.nn.softmax(log_proj_w_k, dim=-1), rf_w_v)
@@ -202,12 +213,21 @@ class EVA(LocalAttention):
         num_rfa_chunks = rfa_chunk.shape[-1]
 
         # compute local attention
-        local_dots_mask = self.window_partition(
-            key_padding_mask, 
-            seq_shape, 
+        #(b,1,w,i)
+        q_local_dots_mask = self.window_partition( 
+            q_key_padding_mask, 
+            q_len, 
             ext_window_size=self.ext_size,
             pad_val=1
-            ).to(jnp.bool).transpose(-1, -2)
+            ).to(jnp.bool).squeeze(-1)
+        #(b,1,w,j)
+        kv_local_dots_mask = self.window_partition(
+            kv_key_padding_mask, 
+            kv_len, 
+            ext_window_size=self.ext_size,
+            pad_val=1
+            ).to(jnp.bool).squeeze(-1)
+        local_dots_mask = jnp.einsum('bhwi,bhwj->bhwij',q_local_dots_mask,kv_local_dots_mask)
 
         log_qk_local_dot = jnp.einsum('bhwie,bhwje->bhwij', w_q, w_k) * self.scale # [b, h, w, i, j]
         if self.use_t5_rpe:
@@ -225,11 +245,11 @@ class EVA(LocalAttention):
         output_local = jnp.einsum('bhwij,bhwjd->bhwid', local_attn, w_v)
         output_snis = jnp.einsum('bhwic,bhcd->bhwid', ra_attn, beta) 
         ######################## Combine them together ############################
-        output = self.window_merge(output_snis + output_local, seq_shape) # [b, h, n, d]
-        x = output.permute(0, 2, 1, 3).reshape((B,) + tuple(seq_shape) + (C,))
+        output = self.window_merge(output_snis + output_local, q_len) # [b, h, n, d]
+        x = output.permute(0, 2, 1, 3) #(b,n,h,d)
         x = self.proj(x)
-        if orig_n is not None:
-            x = x[..., :orig_n, :]
+        if q_orig_n is not None:
+            x = x[..., :q_orig_n, :]
         x = self.proj_drop(x)
         return x
 
