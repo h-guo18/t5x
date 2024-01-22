@@ -42,23 +42,23 @@ class NestedNamespace(argparse.Namespace):
 
 from .abstract_attention import MultiheadAttention
 from .local_attention import LocalAttention
-from .kernelized_attention import KernelizedAttention
-from .lara import LinearRA
-from .randomized_attention import RandomizedAttention
-from .scatterbrain_attention import ScatterBrain
+# from .kernelized_attention import KernelizedAttention
+# from .lara import LinearRA
+# from .randomized_attention import RandomizedAttention
+# from .scatterbrain_attention import ScatterBrain
 from .eva import EVA
-from .causal_eva import CausalEVAttention
+# from .causal_eva import CausalEVAttention
 
 class AttentionFactory(object):
     attn_dict = {
-        'performer': KernelizedAttention,
+        # 'performer': KernelizedAttention,
         'softmax': MultiheadAttention,
         'local': LocalAttention,
-        'lara': LinearRA,
-        'ra': RandomizedAttention,
-        'scatterbrain': ScatterBrain,
+        # 'lara': LinearRA,
+        # 'ra': RandomizedAttention,
+        # 'scatterbrain': ScatterBrain,
         'eva': EVA,
-        'causal_eva': CausalEVAttention,
+        # 'causal_eva': CausalEVAttention,
     }
     def __init__(self):
         super(AttentionFactory, self).__init__()

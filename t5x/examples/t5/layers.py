@@ -29,7 +29,7 @@ from jax import random
 import jax.numpy as jnp
 import numpy as np
 from .fast_attention import make_fast_generalized_attention
-from .efficient_attention import EVA
+# from .efficient_attention import EVA
 printfile = open('print.txt', 'w')
 from jax.config import config
 # config.update('jax_disable_jit', True)
@@ -377,16 +377,25 @@ class MultiHeadDotProductAttention(nn.Module):
 
     if self.linformer:
       #E=F
-      # linformer_E = self.param('E',nn.initializers.glorot_normal(dtype=jnp.float32),(key.shape[-3], self.linformer_dim))
-      # linformer_E = nn.initializers.glorot_normal()(jax.random.PRNGKey(E_key),(key.shape[-2],key.shape[-3], self.linformer_dim),jnp.float32)
-      # linformer_F = nn.initializers.glorot_normal()(jax.random.PRNGKey(F_key),(key.shape[-2],key.shape[-3], self.linformer_dim),jnp.float32)
-      linformer_E = nn.initializers.glorot_normal()(jax.random.PRNGKey(42),(key.shape[-3], self.linformer_dim),self.dtype)
+      linformer_E = nn.initializers.glorot_normal()(jax.random.PRNGKey(42),(self.num_heads,key.shape[-3], self.linformer_dim),self.dtype)
 
       #project key and value to shape [batch, linformer_k, head, depth]
-      key = jnp.einsum("blhd,lk->bkhd",key,linformer_E)
-      value = jnp.einsum("blhd,lk->bkhd",value,linformer_E)
-      # key = jnp.einsum("blhd,hlk->bkhd",key,linformer_E)
-      # value = jnp.einsum("blhd,hlk->bkhd",value,linformer_E)
+      # assert key.shape[1] == 256
+      # key = jnp.einsum('blhd->bhdl',key)
+      # key = DenseGeneral(
+      #   features=self.linformer_dim, 
+      #   dtype=key.dtype,
+      #   name='linformer_E')(key)
+      # key = jnp.einsum('bhdk->bkhd',key)
+      
+      # value = jnp.einsum('blhd->bhdl',value)
+      # value = DenseGeneral(
+      #   features=self.linformer_dim, 
+      #   dtype=value.dtype,
+      #   name='linformer_F')(value)
+      # value = jnp.einsum('bhdk->bkhd',value)
+      key = jnp.einsum("blhd,hlk->bkhd",key,linformer_E)
+      value = jnp.einsum("blhd,hlk->bkhd",value,linformer_E)
     if self.kernel_method == 'performer':
       attn_fn = make_fast_generalized_attention(qkv_dim=self.head_dim,
                                                 renormalize_attention=False,
@@ -400,8 +409,8 @@ class MultiHeadDotProductAttention(nn.Module):
                                           lax_scan_unroll = 64,
                                           kernel_fn = (lambda x: (jax.nn.elu(x) + 1) )
                                           )
-    elif self.kernel_method=='eva':
-      attn_fn = EVA().forward
+    # elif self.kernel_method=='eva':
+    #   attn_fn = EVA().forward
     else:
       attn_fn = dot_product_attention
       

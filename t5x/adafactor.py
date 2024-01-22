@@ -327,6 +327,8 @@ class Adafactor(OptimizerDef):
       factorize over.
     """
     param_ndim = len(shape)
+    if len(rule) == 0:  
+      rule = None
 
     if rule is None:
       # No factorization.

@@ -1,0 +1,13 @@
+__pycache__/
+*.csv
+*.json
+*.log
+*.png
+*.ipynb
+*.sh
+out/
+ckpts/
+ckpts_old/
+*.egg*
+build/
+*.txt

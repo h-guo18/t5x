@@ -148,7 +148,7 @@ class DecoderLayer(nn.Module):
         name='self_attention',
         attn_type = "self-attn-causal",
         linformer=False,
-        kernel_method = cfg.kernel_method
+        # kernel_method = cfg.kernel_method
         )(
             x,
             x,
@@ -177,7 +177,7 @@ class DecoderLayer(nn.Module):
         attn_type="cross-attn",
         linformer=False,
         linformer_dim = cfg.linformer_dim,
-        kernel_method = cfg.kernel_method
+        # kernel_method = cfg.kernel_method
         )(
             y, encoded, encoder_decoder_mask, kvmask=kvmask,qmask=qmask,E_key=layer_idx+10,F_key=layer_idx+100,deterministic=deterministic)
     y = nn.Dropout(
