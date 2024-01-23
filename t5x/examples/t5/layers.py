@@ -321,11 +321,6 @@ class MultiHeadDotProductAttention(nn.Module):
     
     
     assert self.attn_type in ["self-attn","cross-attn","self-attn-causal"], f"invalid attn_type: {self.attn_type }"
-    # if self.kernel_method:
-    #     mask = mask[:,:,:,0:1]
-    #     kvmask = jnp.einsum("bhld->blhd",mask)
-    #     value = value * kvmask
-        # mask=None
       
     if self.linformer or self.kernel_method:
       if self.attn_type == "self-attn":
@@ -334,7 +329,6 @@ class MultiHeadDotProductAttention(nn.Module):
         kvmask = jnp.einsum("bhld->blhd",mask) # (batch,length,1,1)
         key = key * kvmask
         value = value * kvmask
-        # mask=None
       elif self.attn_type == "cross-attn":
         kvmask = jnp.einsum("bhld->blhd",kvmask[:,:,:,0:1])
         key = key * kvmask
@@ -342,7 +336,6 @@ class MultiHeadDotProductAttention(nn.Module):
         if qmask is not None:
           qmask = jnp.einsum("bhld->blhd",qmask[:,:,:,0:1])
           query = query * qmask
-        # mask=None
       elif self.attn_type == "self-attn-causal":
         if qmask is not None:
           qmask = jnp.einsum("bhld->blhd",qmask[:,:,:,0:1])
@@ -353,7 +346,6 @@ class MultiHeadDotProductAttention(nn.Module):
           value = value * kvmask
           causal_mask = jnp.tril(jnp.ones((query.shape[0],1,query.shape[-3],self.linformer_dim)))
           mask = causal_mask
-          # mask = None
         
     mask = None if self.kernel_method or self.linformer else mask
     
@@ -376,26 +368,25 @@ class MultiHeadDotProductAttention(nn.Module):
       dropout_rng = self.make_rng('dropout')
 
     if self.linformer:
-      #E=F
-      linformer_E = nn.initializers.glorot_normal()(jax.random.PRNGKey(42),(self.num_heads,key.shape[-3], self.linformer_dim),self.dtype)
+      # linformer_E = nn.initializers.glorot_normal()(jax.random.PRNGKey(42),(self.num_heads,key.shape[-3], self.linformer_dim),self.dtype)
 
-      #project key and value to shape [batch, linformer_k, head, depth]
-      # assert key.shape[1] == 256
-      # key = jnp.einsum('blhd->bhdl',key)
-      # key = DenseGeneral(
-      #   features=self.linformer_dim, 
-      #   dtype=key.dtype,
-      #   name='linformer_E')(key)
-      # key = jnp.einsum('bhdk->bkhd',key)
+      # project key and value to shape [batch, linformer_k, head, depth]
+      assert key.shape[1] == 256
+      key = jnp.einsum('blhd->bhdl',key)
+      key = DenseGeneral(
+        features=self.linformer_dim, 
+        dtype=key.dtype,
+        name='linformer_E')(key)
+      key = jnp.einsum('bhdk->bkhd',key)
       
-      # value = jnp.einsum('blhd->bhdl',value)
-      # value = DenseGeneral(
-      #   features=self.linformer_dim, 
-      #   dtype=value.dtype,
-      #   name='linformer_F')(value)
-      # value = jnp.einsum('bhdk->bkhd',value)
-      key = jnp.einsum("blhd,hlk->bkhd",key,linformer_E)
-      value = jnp.einsum("blhd,hlk->bkhd",value,linformer_E)
+      value = jnp.einsum('blhd->bhdl',value)
+      value = DenseGeneral(
+        features=self.linformer_dim, 
+        dtype=value.dtype,
+        name='linformer_F')(value)
+      value = jnp.einsum('bhdk->bkhd',value)
+      # key = jnp.einsum("blhd,hlk->bkhd",key,linformer_E)
+      # value = jnp.einsum("blhd,hlk->bkhd",value,linformer_E)
     if self.kernel_method == 'performer':
       attn_fn = make_fast_generalized_attention(qkv_dim=self.head_dim,
                                                 renormalize_attention=False,

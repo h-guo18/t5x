@@ -1340,38 +1340,7 @@ class FastAttentionviaLowRankDecomposition(FastAttention):
     key_prime = key_prime.astype(dtype)
 
     if self.unidirectional:
-      index = attention_dims_t[0]
-      z_slice_shape = key_prime.shape[0:len(batch_dims_t)] + (
-          key_prime.shape[-1],) + (value.shape[-1],)
-
-      numerator_fn = _numerator(z_slice_shape, precision, dtype, self.lax_scan_unroll)
-      w = numerator_fn(
-          jnp.moveaxis(query_prime, index, 0),
-          jnp.moveaxis(key_prime, index, 0), jnp.moveaxis(value, index, 0))
-
-      # Constructing w = (Q^{'}(K^{'})^{T})_{masked}V
-      w = jnp.moveaxis(w, 0, index)
-
-      if not self.renormalize_attention:
-        # Unidirectional, not-normalized attention.
-        perm_inv = _invert_perm(qk_perm)
-        result = w.transpose(perm_inv)
-        return result
-      else:
-        # Unidirectional, normalized attention.
-        thick_all_ones = jnp.zeros(key.shape[0:-1]) + jnp.ones(
-            key_extra.shape[0:len(axis)])
-
-        index = attention_dims_t[0]
-        t_slice_shape = key_prime.shape[0:len(batch_dims_t)] + (
-            key_prime.shape[-1],)
-        denominator_fn = _denominator(t_slice_shape, precision,
-                                      self.lax_scan_unroll)
-        r = denominator_fn(
-            jnp.moveaxis(query_prime, index, 0),
-            jnp.moveaxis(key_prime, index, 0))
-
-        r = jnp.moveaxis(r, 0, index)
+      raise NotImplementedError
     else:
       contract_query = tuple(
           range(len(batch_dims) + len(axis),

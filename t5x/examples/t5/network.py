@@ -65,6 +65,7 @@ class EncoderLayer(nn.Module):
     if cfg.absolute_positional_embedding:
         #when using absolute positional embedding, set relative bias to zero
         encoder_bias = jnp.zeros_like(encoder_bias)
+    assert cfg.absolute_positional_embedding
 
     # Attention block.
     assert inputs.ndim == 3
@@ -176,7 +177,7 @@ class DecoderLayer(nn.Module):
         name='encoder_decoder_attention',
         attn_type="cross-attn",
         linformer=False,
-        linformer_dim = cfg.linformer_dim,
+        # linformer_dim = cfg.linformer_dim,
         # kernel_method = cfg.kernel_method
         )(
             y, encoded, encoder_decoder_mask, kvmask=kvmask,qmask=qmask,E_key=layer_idx+10,F_key=layer_idx+100,deterministic=deterministic)
@@ -353,6 +354,7 @@ class Transformer(nn.Module):
     assert encoder_input_tokens.ndim == 2, (
         f'Expected `encoder_input_tokens` to be of shape (batch, len). '
         f'Got {encoder_input_tokens.shape}')
+    assert encoder_input_tokens.shape[1] == 256
 
     # Make padding attention mask.
     encoder_mask = layers.make_attention_mask(
