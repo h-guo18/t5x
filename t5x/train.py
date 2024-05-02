@@ -47,7 +47,7 @@ from t5x import trainer as trainer_lib
 from t5x import utils
 import tensorflow as tf
 
-from jax.config import config
+# from jax.config import config
 # config.update('jax_disable_jit', True)
 # pylint:enable=g-import-not-at-top
 
