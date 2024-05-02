@@ -130,12 +130,13 @@ infer_eval/utils.DatasetConfig:
   module = %MIXTURE_OR_TASK_MODULE
 
 utils.CheckpointConfig:
-  restore = None
+  restore = @utils.RestoreCheckpointConfig()
   save = @utils.SaveCheckpointConfig()
 utils.RestoreCheckpointConfig:
   path = %INITIAL_CHECKPOINT_PATH
   mode = 'specific'
   dtype = 'float32'
+  fallback_to_scratch = True
 utils.SaveCheckpointConfig:
   period = 32000
   dtype = 'float32'

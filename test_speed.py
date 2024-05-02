@@ -62,11 +62,9 @@ last_t = start_t
 
 batch_size = 1
 # res = []
-for modelname in ["lin+ker", "kernel", "linformer", "vanilla"]:
-# for modelname in ["t5-vanilla"]:
-    for l in tqdm(range(12000,20000,2000)):
-        # for length in ['1072']:
-        # examples = [examples_of_lengths[length]]*batch_size
+# for modelname in ["lin+ker", "kernel", "linformer", "vanilla"]:
+for modelname in ["t5-vanilla"]:
+    for l in tqdm(range(500,13000,3000)):
         print("input and output length:", l)
         # input_length = len(examples[0]["input"].split(" "))
         # target_length=len(examples[0]["target"].split(" "))
@@ -88,7 +86,7 @@ for modelname in ["lin+ker", "kernel", "linformer", "vanilla"]:
             dropout_rate=0.0,
             logits_via_embedding=True,
             linformer=("lin" in modelname),
-            linformer_dim = 1500,
+            linformer_dim = 150,
             kernel_method=('performer' if "ker" in modelname else None)
         ))
         model = t5x.models.EncoderDecoderModel(
@@ -142,7 +140,7 @@ for modelname in ["lin+ker", "kernel", "linformer", "vanilla"]:
                 prompt_with_targets=False
             )
         )
-        for repeat in range(30):
+        for repeat in range(10):
             stime = time.time()
             # encoded = block_until_ready(
             #     encode_jit(variables, fake_encoder_inputs))
@@ -151,7 +149,8 @@ for modelname in ["lin+ker", "kernel", "linformer", "vanilla"]:
             res = block_until_ready(infer_jit(batch=fake_batch))
             # print(res)
             infer_time = time.time()-stime
-            with open("res.json", "a")as f:
-                f.write("\n")
-                f.write(json.dumps({"model": modelname, "inlen": l,
-                        "outlen": decoder_len, "time": infer_time}, ensure_ascii=False))
+            if repeat > 0:
+                with open("res.json", "a")as f:
+                    f.write("\n")
+                    f.write(json.dumps({"model": modelname, "inlen": l,
+                            "outlen": decoder_len, "time": infer_time}, ensure_ascii=False))

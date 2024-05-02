@@ -54,7 +54,7 @@ class EncoderLayer(nn.Module):
   relative_embedding: nn.Module
 
   @nn.compact
-  def __call__(self, inputs, encoder_mask=None, deterministic=False, layer_idx = -1):
+  def __call__(self, inputs, encoder_mask=None, deterministic=False, layer_idx = -1,decode= False):
     cfg = self.config
 
     # Relative position embedding as attention biases.
@@ -65,7 +65,7 @@ class EncoderLayer(nn.Module):
     if cfg.absolute_positional_embedding:
         #when using absolute positional embedding, set relative bias to zero
         encoder_bias = jnp.zeros_like(encoder_bias)
-    assert cfg.absolute_positional_embedding
+    # assert cfg.absolute_positional_embedding
 
     # Attention block.
     assert inputs.ndim == 3
@@ -85,7 +85,7 @@ class EncoderLayer(nn.Module):
         kernel_method = cfg.kernel_method,
         attn_type= "self-attn"
         )(
-            x, x, encoder_mask, encoder_bias, E_key=layer_idx+10,F_key=layer_idx+100,deterministic=deterministic)
+            x, x, encoder_mask, encoder_bias, E_key=layer_idx+10,F_key=layer_idx+100,deterministic=deterministic,decode = decode)
     x = nn.Dropout(
         rate=cfg.dropout_rate, broadcast_dims=(-2,))(
             x, deterministic=deterministic)
@@ -212,7 +212,8 @@ class Encoder(nn.Module):
   def __call__(self,
                encoder_input_tokens,
                encoder_mask=None,
-               deterministic=False):
+               deterministic=False,
+               decode = False):
     cfg = self.config
     assert encoder_input_tokens.ndim == 2  # [batch, length]
     rel_emb = layers.RelativePositionBiases(
@@ -240,7 +241,7 @@ class Encoder(nn.Module):
       # [batch, length, emb_dim] -> [batch, length, emb_dim]
       x = EncoderLayer(
           config=cfg, relative_embedding=rel_emb,
-          name=f'layers_{lyr}')(x, encoder_mask, deterministic,layer_idx=lyr)
+          name=f'layers_{lyr}')(x, encoder_mask, deterministic,layer_idx=lyr,decode = decode)
 
     x = layers.LayerNorm(dtype=cfg.dtype, name='encoder_norm')(x)
     return nn.Dropout(rate=cfg.dropout_rate)(x, deterministic=deterministic)
@@ -348,13 +349,14 @@ class Transformer(nn.Module):
   def encode(self,
              encoder_input_tokens,
              encoder_segment_ids=None,
-             enable_dropout=True):
+             enable_dropout=True,
+             decode = False):
     """Applies Transformer encoder-branch on the inputs."""
     cfg = self.config
     assert encoder_input_tokens.ndim == 2, (
         f'Expected `encoder_input_tokens` to be of shape (batch, len). '
         f'Got {encoder_input_tokens.shape}')
-    assert encoder_input_tokens.shape[1] == 256
+    # assert encoder_input_tokens.shape[1] == 256
 
     # Make padding attention mask.
     encoder_mask = layers.make_attention_mask(
@@ -372,7 +374,7 @@ class Transformer(nn.Module):
               dtype=cfg.dtype))
     #truncate encoder_mask shape
     return self.encoder(
-        encoder_input_tokens, encoder_mask, deterministic=not enable_dropout)
+        encoder_input_tokens, encoder_mask, deterministic=not enable_dropout,decode = decode)
 
   def decode(
       self,
@@ -484,7 +486,8 @@ class Transformer(nn.Module):
     encoded = self.encode(
         encoder_input_tokens,
         encoder_segment_ids=encoder_segment_ids,
-        enable_dropout=enable_dropout)
+        enable_dropout=enable_dropout,
+        decode = decode)
 
     return self.decode(
         encoded,

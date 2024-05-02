@@ -1289,7 +1289,8 @@ class FastAttentionviaLowRankDecomposition(FastAttention):
                             dropout_rng=None,
                             dropout_rate=0.,
                             deterministic=False,
-                            precision=None):
+                            precision=None,
+                            **kwargs):
 
     assert key.shape[:-1] == value.shape[:-1]
     assert (query.shape[0:1] == key.shape[0:1] and

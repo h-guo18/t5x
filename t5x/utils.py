@@ -68,6 +68,9 @@ Shape = Tuple[int, ...]
 TensorBoardLogger = seqio.TensorBoardLogger
 get_local_data = checkpoints.get_local_data
 
+def just_states_transform(checkpoint, opt_state):
+    return state_utils.apply_assignment_map(checkpoint, opt_state,
+        assignment_map=[(r'state.*', None)])
 
 class EvaluatorConstructor(typing_extensions.Protocol):
   """A function that returns an Evaluator.
@@ -194,7 +197,9 @@ class RestoreCheckpointConfig:
   # be applied after the `assignment_map` transformations.
   state_transformation_fns: Sequence[
       checkpoints.RestoreStateTransformationFn
-  ] = ()
+  ] = (functools.partial(
+          state_utils.apply_assignment_map, assignment_map=[]
+      ),)
   # CheckpointManager implementation to use.
   checkpoint_manager_cls: checkpoints.CheckpointManagerConstructor = (
       checkpoints.OrbaxCheckpointManagerInterface
@@ -956,6 +961,7 @@ def get_fallback_state(
     init_rng: Optional[jnp.ndarray],
 ) -> Optional[Mapping[str, Any]]:
   """Returns the fallback_state that can be used in restore()."""
+  # breakpoint()
   if restore_cfg is None:
     return
   if restore_cfg.fallback_to_scratch:

@@ -9,11 +9,11 @@ from t5x import utils
 include "t5x/examples/t5/t5_1_0/base.gin"
 include "t5x/configs/runs/train_from_scratch.gin"
 
-MIXTURE_OR_TASK_NAME = "wmt_t2t_ende_v003"
+MIXTURE_OR_TASK_NAME="wmt14_enfr_v003"
 TASK_FEATURE_LENGTHS = {"inputs": 256, "targets": 256}
 TRAIN_STEPS = %TRAIN_STEPS
 DROPOUT_RATE = 0.1
-INITIAL_CHECKPOINT_PATH = "gs://t5-data/pretrained_models/t5x/t5_base/checkpoint_999900"
+INITIAL_CHECKPOINT_PATH = %INITIAL_CHECKPOINT_PATH
 # `LOSS_NORMALIZING_FACTOR`: When fine-tuning a model that was pre-trained
 # using Mesh Tensorflow (e.g. the public T5 / mT5 / ByT5 models), this should be
 # set to `pretraining batch_size` * `target_token_length`. For T5 and T5.1.1:
