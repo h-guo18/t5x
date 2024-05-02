@@ -207,7 +207,7 @@ def run(main):
     args = gin_utils.rewrite_gin_args(args)
     return fdl_flags.flags_parser(args)
 
-  jax.config.parse_flags_with_absl()
+  # jax.config.parse_flags_with_absl()
   if using_fdl():
     app.run(main, flags_parser=flags_parser)
   else:
