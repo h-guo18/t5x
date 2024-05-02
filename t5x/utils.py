@@ -51,7 +51,7 @@ from t5x import train_state as train_state_lib
 import tensorflow as tf
 from tensorflow.io import gfile
 import typing_extensions
-from jax.config import config
+# from jax.config import config
 # config.update('jax_disable_jit', True)
 
 FLAGS = flags.FLAGS
