@@ -138,7 +138,7 @@ utils.RestoreCheckpointConfig:
   dtype = 'float32'
   fallback_to_scratch = True
 utils.SaveCheckpointConfig:
-  period = 10000
+  period = 2000
   dtype = 'float32'
   keep = None  # keep all checkpoints
   save_dataset = False  # don't checkpoint dataset state
